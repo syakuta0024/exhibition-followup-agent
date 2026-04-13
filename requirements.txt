@@ -1,0 +1,10 @@
+chromadb
+langchain-chroma
+langchain
+langchain-openai
+langchain-community
+langchain-text-splitters
+streamlit
+python-dotenv
+pandas
+rank_bm25
