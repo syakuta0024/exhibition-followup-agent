@@ -4,7 +4,7 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.x-FF4B4B?style=flat&logo=streamlit&logoColor=white)
 ![LangChain](https://img.shields.io/badge/LangChain-0.3+-1C3C3C?style=flat&logo=chainlink&logoColor=white)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.x-F7931A?style=flat)
-![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4.1--mini-412991?style=flat&logo=openai&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--5.4--nano-412991?style=flat&logo=openai&logoColor=white)
 
 製造業DX特化の架空SIer「**NTX株式会社**」が展示会で獲得したリードに対し、
 RAGによるパーソナライズされたフォローアップメールを自動生成するAIエージェント。
@@ -148,7 +148,7 @@ sequenceDiagram
 ### 1. リポジトリのクローン
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/exhibition-followup-agent.git
+git clone https://github.com/syakuta0024/exhibition-followup-agent.git
 cd exhibition-followup-agent
 ```
 
