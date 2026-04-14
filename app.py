@@ -2,10 +2,14 @@
 Streamlitアプリケーション エントリーポイント
 
 NTX株式会社 展示会フォローアップエージェントのWebUI。
-リード一覧の表示・フォローアップメール生成・結果のダウンロードを提供する。
+CSVアップロード → カラムマッピング → メール生成 → ダウンロード のフローを提供する。
+
+対応CSVフォーマット:
+  - Lead Manager, Q-PASS, Sansan, 自社タブレット等の各種エクスポート形式
+  - エンコーディング: UTF-8 / UTF-8 BOM / Shift_JIS / CP932
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -14,8 +18,11 @@ from src.config import Config
 from src.agent import FollowUpAgent
 from src.email_generator import EmailGenerator
 from src.utils import (
+    auto_map_columns,
+    apply_column_mapping,
     filter_leads_by_rank,
     format_lead_summary,
+    load_csv_with_encoding,
     load_leads,
 )
 from src.vectordb import VectorDBManager
@@ -31,6 +38,9 @@ RANK_BADGE_STYLE: Dict[str, str] = {
     "E": "background-color:#aaaaaa;color:white;padding:2px 8px;border-radius:4px;font-weight:bold;",
 }
 
+# マッピングしない場合のプレースホルダー
+NO_MAPPING_LABEL = "（マッピングしない）"
+
 
 # ---------------------------------------------------------------
 # session_state の初期化
@@ -38,12 +48,20 @@ RANK_BADGE_STYLE: Dict[str, str] = {
 def _init_session_state() -> None:
     """アプリ起動時に session_state のキーを初期化する"""
     defaults = {
-        "vectordb": None,       # VectorDBManager インスタンス
-        "agent": None,          # FollowUpAgent インスタンス
-        "email_gen": None,      # EmailGenerator インスタンス
-        "db_built": False,      # インデックス構築済みフラグ
-        "results": [],          # 一括生成結果リスト
-        "single_result": None,  # 単一メール生成結果
+        # コンポーネントインスタンス
+        "vectordb": None,           # VectorDBManager インスタンス
+        "agent": None,              # FollowUpAgent インスタンス
+        "email_gen": None,          # EmailGenerator インスタンス
+        "db_built": False,          # ナレッジベース構築済みフラグ
+        # データ管理
+        "leads_df": None,           # マッピング確定後の標準化DataFrame
+        "raw_uploaded_df": None,    # アップロード直後の生DataFrame
+        "auto_mapping": {},         # 自動推定マッピング辞書
+        "mapping_confirmed": False, # カラムマッピング確定フラグ
+        "data_source": None,        # "upload" or "demo"
+        # 生成結果
+        "results": [],              # 一括生成結果リスト
+        "single_result": None,      # 単一メール生成結果
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -58,7 +76,6 @@ def _initialize_components() -> bool:
     VectorDBManager と EmailGenerator を初期化して session_state に格納する。
     APIキーが未設定の場合は False を返す。
     """
-    # APIキー未設定チェック
     if not Config.OPENAI_API_KEY:
         st.error(
             "⚠️ OPENAI_API_KEY が設定されていません。\n\n"
@@ -66,22 +83,18 @@ def _initialize_components() -> bool:
         )
         return False
 
-    # VectorDBManager 初期化（まだの場合のみ）
     if st.session_state["vectordb"] is None:
         st.session_state["vectordb"] = VectorDBManager()
 
-    # EmailGenerator 初期化（まだの場合のみ）
     if st.session_state["email_gen"] is None:
         st.session_state["email_gen"] = EmailGenerator()
 
-    # FollowUpAgent 初期化（まだの場合のみ）
     if st.session_state["agent"] is None:
         st.session_state["agent"] = FollowUpAgent(
             vectordb_manager=st.session_state["vectordb"],
             email_generator=st.session_state["email_gen"],
         )
 
-    # インデックス構築状態を同期
     if st.session_state["vectordb"] is not None:
         st.session_state["db_built"] = st.session_state["vectordb"].is_index_built()
 
@@ -91,28 +104,87 @@ def _initialize_components() -> bool:
 # ---------------------------------------------------------------
 # サイドバー
 # ---------------------------------------------------------------
-def _render_sidebar(leads_df: pd.DataFrame) -> List[str]:
+def _render_sidebar() -> List[str]:
     """
-    サイドバーを描画し、選択された商談確度リストを返す。
+    サイドバーを描画する。
 
-    Parameters
-    ----------
-    leads_df : pd.DataFrame
-        全リードデータ（件数表示に使用）
+    上から順に:
+    1. CSVアップロード / デモデータ読み込みセクション
+    2. ナレッジベース構築セクション
+    3. 商談確度フィルター（データ読み込み後のみ表示）
 
     Returns
     -------
     List[str]
         選択された商談確度のリスト
     """
+    selected_ranks: List[str] = ["A", "B", "C", "D", "E"]
+
     with st.sidebar:
-        # タイトル
         st.markdown("## 🏭 NTX株式会社")
         st.markdown("**展示会フォローアップシステム**")
         st.divider()
 
-        # ナレッジベース構築ボタン
-        st.markdown("#### ナレッジベース")
+        # ── セクション1: データ読み込み ───────────────────────────
+        st.markdown("#### 📁 データ読み込み")
+
+        # CSVアップロード
+        uploaded_file = st.file_uploader(
+            "CSVファイルをアップロード",
+            type=["csv"],
+            help="Lead Manager, Q-PASS, Sansan等のエクスポートCSVに対応。\nUTF-8 / Shift_JIS / BOM付き UTF-8 をサポートします。",
+        )
+
+        # ファイルがアップロードされた場合の処理
+        if uploaded_file is not None:
+            # 前回とファイルが変わった場合はマッピングをリセット
+            if uploaded_file.name != st.session_state.get("_last_uploaded_filename"):
+                st.session_state["_last_uploaded_filename"] = uploaded_file.name
+                st.session_state["mapping_confirmed"] = False
+                st.session_state["leads_df"] = None
+                st.session_state["results"] = []
+                st.session_state["single_result"] = None
+                try:
+                    raw_df = load_csv_with_encoding(uploaded_file)
+                    st.session_state["raw_uploaded_df"] = raw_df
+                    # 必須・任意フィールドのマッピングを自動推定
+                    all_fields = {**Config.REQUIRED_FIELDS, **Config.OPTIONAL_FIELDS}
+                    st.session_state["auto_mapping"] = auto_map_columns(
+                        list(raw_df.columns), all_fields
+                    )
+                    st.session_state["data_source"] = "upload"
+                except ValueError as e:
+                    st.error(str(e))
+                    st.session_state["raw_uploaded_df"] = None
+
+        # マッピング状態の表示
+        if st.session_state["mapping_confirmed"]:
+            st.success(f"✅ データ読み込み済み（{len(st.session_state['leads_df'])}件）")
+        elif st.session_state["raw_uploaded_df"] is not None:
+            st.info("⚙️ カラムマッピングを確認してください（下部）")
+
+        st.divider()
+
+        # デモデータ読み込みボタン
+        if st.button("🗂️ デモデータを使う", use_container_width=True,
+                     help="data/leads.csv のサンプルデータを読み込みます"):
+            try:
+                demo_df = load_leads(Config.LEADS_CSV_PATH)
+                st.session_state["leads_df"] = demo_df
+                st.session_state["raw_uploaded_df"] = None
+                st.session_state["mapping_confirmed"] = True
+                st.session_state["data_source"] = "demo"
+                st.session_state["results"] = []
+                st.session_state["single_result"] = None
+                st.toast("✅ デモデータを読み込みました", icon="🗂️")
+                st.rerun()
+            except FileNotFoundError as e:
+                st.error(f"デモデータが見つかりません: {e}")
+
+        st.divider()
+
+        # ── セクション2: ナレッジベース ──────────────────────────
+        st.markdown("#### 🗄️ ナレッジベース")
 
         if st.session_state["db_built"]:
             st.success("✅ 構築済み")
@@ -132,24 +204,189 @@ def _render_sidebar(leads_df: pd.DataFrame) -> List[str]:
 
         st.divider()
 
-        # 商談確度フィルター
-        st.markdown("#### 商談確度フィルター")
-        selected_ranks = st.multiselect(
-            label="対象ランク",
-            options=["A", "B", "C", "D", "E"],
-            default=["A", "B", "C", "D", "E"],
-            help="表示・処理対象の商談確度を選択してください",
-        )
+        # ── セクション3: 商談確度フィルター（データ読み込み後のみ）──
+        if st.session_state["mapping_confirmed"] and st.session_state["leads_df"] is not None:
+            leads_df = st.session_state["leads_df"]
+            st.markdown("#### 🎯 商談確度フィルター")
+            selected_ranks = st.multiselect(
+                label="対象ランク",
+                options=["A", "B", "C", "D", "E"],
+                default=["A", "B", "C", "D", "E"],
+                help="表示・処理対象の商談確度を選択してください",
+            )
+            if selected_ranks:
+                filtered_count = len(filter_leads_by_rank(leads_df, selected_ranks))
+                st.caption(f"対象: **{filtered_count}件** / 全{len(leads_df)}件")
 
-        # フィルタ後件数の表示
-        if selected_ranks:
-            filtered_count = len(filter_leads_by_rank(leads_df, selected_ranks))
-            st.caption(f"対象リード: **{filtered_count}件** / 全{len(leads_df)}件")
+            st.divider()
 
-        st.divider()
         st.caption("NTX株式会社 展示会フォローアップシステム")
 
     return selected_ranks
+
+
+# ---------------------------------------------------------------
+# データ未読み込み時のウェルカム画面
+# ---------------------------------------------------------------
+def _render_welcome() -> None:
+    """CSVがアップロードされていない初期状態のウェルカム画面を表示する"""
+    st.markdown("---")
+    col1, col2 = st.columns(2, gap="large")
+
+    with col1:
+        st.markdown("### 📁 CSVをアップロード")
+        st.markdown(
+            "左サイドバーから展示会リードCSVをアップロードしてください。\n\n"
+            "**対応ツール例:**\n"
+            "- Lead Manager\n"
+            "- Q-PASS\n"
+            "- Sansan\n"
+            "- 自社タブレット / Google フォーム\n\n"
+            "**対応エンコーディング:** UTF-8 / UTF-8 BOM / Shift_JIS / CP932"
+        )
+
+    with col2:
+        st.markdown("### 🗂️ デモデータで試す")
+        st.markdown(
+            "サイドバーの **「🗂️ デモデータを使う」** ボタンをクリックすると、\n\n"
+            "架空の展示会リード18件を読み込んで\nすぐに機能を試せます。\n\n"
+            "**含まれるデータ:**\n"
+            "- 商談確度A〜E のリード各種\n"
+            "- 製造業DX関連の架空企業データ\n"
+            "- 関心製品・営業メモ付き"
+        )
+
+    st.markdown("---")
+    st.markdown(
+        "#### 💡 使い方の流れ\n"
+        "1. **CSVアップロード** または **デモデータ** を選択\n"
+        "2. **カラムマッピング** を確認・調整して確定\n"
+        "3. サイドバーで **ナレッジベース構築**\n"
+        "4. **メール生成** タブでフォローアップメールを生成\n"
+        "5. 生成結果を **CSV ダウンロード**"
+    )
+
+
+# ---------------------------------------------------------------
+# カラムマッピング確認・確定UI（メインエリア）
+# ---------------------------------------------------------------
+def _render_column_mapping() -> None:
+    """
+    アップロードされたCSVのカラムマッピング確認UIを表示する。
+
+    - 自動推定されたマッピングを selectbox で表示
+    - 必須フィールドが未マッピングの場合は警告を表示
+    - 「✅ マッピング確定」ボタンで leads_df を確定する
+    """
+    raw_df: pd.DataFrame = st.session_state["raw_uploaded_df"]
+    auto_mapping: Dict = st.session_state["auto_mapping"]
+
+    st.subheader("⚙️ カラムマッピングの確認")
+    st.caption(
+        "アップロードされたCSVのカラム名と、システム内部のフィールドの対応を確認してください。\n"
+        "自動推定が異なる場合はドロップダウンで修正できます。"
+    )
+
+    # CSVプレビュー（先頭5行）
+    with st.expander(f"📋 アップロードされたCSVのプレビュー（先頭5行 / 全{len(raw_df)}件）", expanded=True):
+        st.dataframe(raw_df.head(5), use_container_width=True, hide_index=True)
+        st.caption(f"カラム数: {len(raw_df.columns)}  |  総行数: {len(raw_df)}")
+
+    st.markdown("---")
+
+    # CSVカラムの選択肢（「マッピングしない」を先頭に追加）
+    column_options = [NO_MAPPING_LABEL] + list(raw_df.columns)
+
+    # フォーム形式でマッピング入力を受け付ける
+    with st.form("column_mapping_form"):
+        # ── 必須フィールド ────────────────────────────────────────
+        st.markdown("#### 🔴 必須フィールド")
+        st.caption("これらのフィールドは正確なメール生成のために必要です")
+
+        required_selections: Dict[str, Optional[str]] = {}
+        req_cols = st.columns(len(Config.REQUIRED_FIELDS))
+
+        for i, (field_key, field_def) in enumerate(Config.REQUIRED_FIELDS.items()):
+            current_match = auto_mapping.get(field_key)
+            default_idx = column_options.index(current_match) if current_match in column_options else 0
+            label = f"{field_def['label']}  \n`{field_key}`"
+            help_text = field_def.get("description", "")
+
+            selected = req_cols[i].selectbox(
+                label=label,
+                options=column_options,
+                index=default_idx,
+                key=f"mapping_required_{field_key}",
+                help=help_text,
+            )
+            required_selections[field_key] = None if selected == NO_MAPPING_LABEL else selected
+
+        # ── 任意フィールド ────────────────────────────────────────
+        st.markdown("#### 🔵 任意フィールド")
+        st.caption("マッピングしなくてもメール生成は可能です。あれば活用されます")
+
+        optional_selections: Dict[str, Optional[str]] = {}
+        # 4列グリッドで表示
+        opt_keys = list(Config.OPTIONAL_FIELDS.keys())
+        for row_start in range(0, len(opt_keys), 4):
+            row_keys = opt_keys[row_start:row_start + 4]
+            opt_cols = st.columns(4)
+            for j, field_key in enumerate(row_keys):
+                field_def = Config.OPTIONAL_FIELDS[field_key]
+                current_match = auto_mapping.get(field_key)
+                default_idx = column_options.index(current_match) if current_match in column_options else 0
+                label = f"{field_def['label']}  \n`{field_key}`"
+
+                selected = opt_cols[j].selectbox(
+                    label=label,
+                    options=column_options,
+                    index=default_idx,
+                    key=f"mapping_optional_{field_key}",
+                )
+                optional_selections[field_key] = None if selected == NO_MAPPING_LABEL else selected
+
+        # 未マッピングカラムの表示
+        all_mapped_cols = {v for v in {**required_selections, **optional_selections}.values() if v}
+        unmapped_cols = [c for c in raw_df.columns if c not in all_mapped_cols]
+        if unmapped_cols:
+            st.info(
+                f"**追加情報として保持されるカラム ({len(unmapped_cols)}件):**  \n"
+                + "、".join(f"`{c}`" for c in unmapped_cols)
+                + "  \nこれらは `extra_カラム名` として保持され、メール生成のコンテキストに活用されます。"
+            )
+
+        # 確定ボタン
+        submitted = st.form_submit_button(
+            "✅ マッピング確定 → メール生成へ進む",
+            type="primary",
+            use_container_width=True,
+        )
+
+        if submitted:
+            # 必須フィールドのバリデーション
+            missing_required = [
+                Config.REQUIRED_FIELDS[k]["label"]
+                for k, v in required_selections.items()
+                if v is None
+            ]
+            if missing_required:
+                st.warning(
+                    f"⚠️ 以下の必須フィールドがマッピングされていません: "
+                    f"{', '.join(missing_required)}\n\n"
+                    "このまま続行するとメール生成の品質が低下する場合があります。"
+                )
+
+            # マッピングを適用してDataFrameを標準化
+            final_mapping = {**required_selections, **optional_selections}
+            leads_df = apply_column_mapping(raw_df, final_mapping)
+
+            # session_state に保存
+            st.session_state["leads_df"] = leads_df
+            st.session_state["mapping_confirmed"] = True
+            st.session_state["results"] = []
+            st.session_state["single_result"] = None
+            st.toast(f"✅ マッピング確定。{len(leads_df)}件のリードを読み込みました", icon="✅")
+            st.rerun()
 
 
 # ---------------------------------------------------------------
@@ -157,59 +394,59 @@ def _render_sidebar(leads_df: pd.DataFrame) -> List[str]:
 # ---------------------------------------------------------------
 def _render_tab_leads(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None:
     """リード一覧タブを描画する"""
-
     st.subheader("📋 展示会リード一覧")
 
-    # フィルタリング
     filtered_df = filter_leads_by_rank(leads_df, selected_ranks) if selected_ranks else leads_df
-    st.caption(f"表示件数: {len(filtered_df)}件（フィルタ: ランク {', '.join(selected_ranks) if selected_ranks else '全て'}）")
+    st.caption(
+        f"表示件数: {len(filtered_df)}件"
+        f"（フィルタ: ランク {', '.join(selected_ranks) if selected_ranks else '全て'}）"
+    )
 
     if filtered_df.empty:
         st.info("選択した商談確度に該当するリードがありません。")
         return
 
-    # 商談確度バッジをHTMLで付与した表示用DataFrameを作成
-    display_df = filtered_df.copy()
-    display_df["ランク"] = display_df["lead_rank"].apply(
-        lambda r: f'<span style="{RANK_BADGE_STYLE.get(r, "")}">{r}</span>'
+    # 表示列を決定（標準フィールド + extra_ カラム）
+    standard_cols = {
+        "lead_id": "ID", "visitor_name": "氏名", "company_name": "会社名",
+        "department": "部署", "job_title": "役職", "lead_rank": "確度",
+        "interested_products": "関心製品", "visit_date": "来場日",
+    }
+    # 存在するカラムのみ表示
+    show_cols = {k: v for k, v in standard_cols.items() if k in filtered_df.columns}
+    display_df = filtered_df[list(show_cols.keys())].rename(columns=show_cols)
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    # ランク凡例バッジ
+    st.markdown(
+        "**ランク凡例:**  " + "　".join(
+            f'<span style="{RANK_BADGE_STYLE[r]}">{r}</span>'
+            for r in ["A", "B", "C", "D", "E"]
+        ),
+        unsafe_allow_html=True,
     )
 
-    # 表示列の整理（カラム名を日本語化）
-    show_df = display_df.rename(columns={
-        "lead_id": "ID",
-        "visitor_name": "氏名",
-        "company_name": "会社名",
-        "department": "部署",
-        "job_title": "役職",
-        "email": "メール",
-        "lead_rank": "確度",
-        "interested_products": "関心製品",
-        "future_requests": "今後の要望",
-        "visit_date": "来場日",
-    })
-
-    # st.dataframe で表示（HTMLレンダリングは非対応のためシンプルに表示）
-    st.dataframe(
-        show_df[[
-            "ID", "氏名", "会社名", "部署", "役職",
-            "確度", "関心製品", "今後の要望", "来場日"
-        ]],
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    # 商談確度の凡例バッジ
-    st.markdown("**ランク凡例:**  " + "　".join(
-        f'<span style="{RANK_BADGE_STYLE[r]}">{r}</span>'
-        for r in ["A", "B", "C", "D", "E"]
-    ), unsafe_allow_html=True)
-
-    # ランク別件数のサマリー
+    # ランク別件数サマリー
     st.divider()
     cols = st.columns(5)
     for i, rank in enumerate(["A", "B", "C", "D", "E"]):
-        cnt = len(filtered_df[filtered_df["lead_rank"] == rank])
+        if "lead_rank" in filtered_df.columns:
+            cnt = len(filtered_df[filtered_df["lead_rank"] == rank])
+        else:
+            cnt = 0
         cols[i].metric(label=f"ランク {rank}", value=f"{cnt}件")
+
+    # extra_ カラムがある場合は追加情報として折りたたみ表示
+    extra_cols = [c for c in filtered_df.columns if c.startswith("extra_")]
+    if extra_cols:
+        with st.expander(f"📎 追加情報カラム ({len(extra_cols)}件)"):
+            st.caption("CSVにあった独自カラムはメール生成のコンテキストに自動的に活用されます")
+            st.dataframe(
+                filtered_df[["visitor_name"] + extra_cols].head(10),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 # ---------------------------------------------------------------
@@ -217,12 +454,10 @@ def _render_tab_leads(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
 # ---------------------------------------------------------------
 def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None:
     """メール生成タブを描画する"""
-
     st.subheader("✉️ フォローアップメール生成")
 
-    # ナレッジベース未構築の警告
     if not st.session_state["db_built"]:
-        st.warning("⚠️ ナレッジベースが未構築です。サイドバーの「ナレッジベース構築」ボタンを押してください。")
+        st.warning("⚠️ ナレッジベースが未構築です。サイドバーの「🔨 ナレッジベース構築」ボタンを押してください。")
 
     filtered_df = filter_leads_by_rank(leads_df, selected_ranks) if selected_ranks else leads_df
 
@@ -230,12 +465,12 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
         st.info("対象リードがありません。サイドバーのランクフィルターを確認してください。")
         return
 
-    # ── 単一メール生成セクション ────────────────────────────────
+    # ── 個別メール生成 ──────────────────────────────────────────
     st.markdown("### 個別メール生成")
 
-    # リード選択ドロップダウン
     lead_options = {
-        f"{row['visitor_name']}（{row['company_name']}）[ランク{row['lead_rank']}]": idx
+        f"{row.get('visitor_name', '?')}（{row.get('company_name', '?')}）"
+        f"[ランク{row.get('lead_rank', '?')}]": idx
         for idx, row in filtered_df.iterrows()
     }
     selected_label = st.selectbox(
@@ -246,12 +481,14 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
     selected_idx = lead_options[selected_label]
     selected_lead = filtered_df.loc[selected_idx].to_dict()
 
-    # 選択リードの情報サマリー
-    with st.container():
-        rank = selected_lead.get("lead_rank", "")
-        badge_html = f'<span style="{RANK_BADGE_STYLE.get(rank, "")}">ランク {rank}</span>'
-        st.markdown(f"**選択中:** {selected_lead.get('visitor_name')} 様　{badge_html}", unsafe_allow_html=True)
-        st.info(format_lead_summary(selected_lead))
+    # 選択リード情報サマリー
+    rank = selected_lead.get("lead_rank", "")
+    badge_html = f'<span style="{RANK_BADGE_STYLE.get(rank, "")}">ランク {rank}</span>'
+    st.markdown(
+        f"**選択中:** {selected_lead.get('visitor_name', '')} 様　{badge_html}",
+        unsafe_allow_html=True,
+    )
+    st.info(format_lead_summary(selected_lead))
 
     # メール生成ボタン
     if st.button("📧 メール生成", type="primary", key="single_gen"):
@@ -275,22 +512,8 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
         st.divider()
         st.markdown("#### 生成結果")
 
-        # 件名（編集可能 ── 編集内容はUIに反映されるがセッション保存は行わない）
-        st.text_input(
-            "📌 件名",
-            value=result.get("subject", ""),
-            key="edit_subject",
-        )
-
-        # 本文（編集可能）
-        st.text_area(
-            "📝 本文",
-            value=result.get("body", ""),
-            height=400,
-            key="edit_body",
-        )
-
-        # 営業アクション指示（編集可能 ── 社内向けの次のアクション）
+        st.text_input("📌 件名", value=result.get("subject", ""), key="edit_subject")
+        st.text_area("📝 本文", value=result.get("body", ""), height=400, key="edit_body")
         st.text_area(
             "🎯 営業アクション指示（社内向け）",
             value=result.get("cta", ""),
@@ -299,29 +522,20 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             help="LLMが生成した、営業担当者が次に実行すべきアクションの指示です。メール本文には含まれません。",
         )
 
-        # 参照資料の表示
         with st.expander("📚 参照資料の詳細"):
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("**参照した技術資料**")
-                tech_docs = result.get("ref_tech_docs", [])
-                if tech_docs:
-                    for f in tech_docs:
-                        st.markdown(f"- `{f}`")
-                else:
-                    st.caption("なし")
+                for f in result.get("ref_tech_docs", []) or ["なし"]:
+                    st.markdown(f"- `{f}`")
             with col2:
                 st.markdown("**参照したCRM記録**")
-                crm_docs = result.get("ref_crm", [])
-                if crm_docs:
-                    for f in crm_docs:
-                        st.markdown(f"- `{f}`")
-                else:
-                    st.caption("なし")
+                for f in result.get("ref_crm", []) or ["なし"]:
+                    st.markdown(f"- `{f}`")
 
     st.divider()
 
-    # ── 全件一括生成セクション ────────────────────────────────
+    # ── 全件一括生成 ──────────────────────────────────────────
     st.markdown("### 全件一括生成")
     st.caption(f"対象: {len(filtered_df)}件のリードに対してメールを一括生成します")
 
@@ -332,8 +546,6 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             agent: FollowUpAgent = st.session_state["agent"]
             total = len(filtered_df)
             results = []
-
-            # プログレスバー
             progress_bar = st.progress(0, text="生成準備中...")
             status_text = st.empty()
 
@@ -342,7 +554,7 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                 visitor = lead.get("visitor_name", "")
                 company = lead.get("company_name", "")
                 status_text.text(f"[{i+1}/{total}] {visitor}様（{company}）のメール生成中...")
-                progress_bar.progress((i) / total, text=f"生成中... {i}/{total}件")
+                progress_bar.progress(i / total, text=f"生成中... {i}/{total}件")
 
                 try:
                     result = agent.process_lead(lead)
@@ -373,7 +585,6 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
 # ---------------------------------------------------------------
 def _render_tab_history() -> None:
     """生成履歴・ダウンロードタブを描画する"""
-
     st.subheader("📊 生成履歴・ダウンロード")
 
     results: List[Dict] = st.session_state.get("results", [])
@@ -384,10 +595,9 @@ def _render_tab_history() -> None:
 
     st.caption(f"生成済み: {len(results)}件")
 
-    # サマリーテーブルの表示
-    summary_rows = []
-    for r in results:
-        summary_rows.append({
+    # サマリーテーブル
+    summary_rows = [
+        {
             "ID": r.get("lead_id", ""),
             "氏名": r.get("visitor_name", ""),
             "会社名": r.get("company_name", ""),
@@ -395,18 +605,18 @@ def _render_tab_history() -> None:
             "宛先メール": r.get("email_to", ""),
             "件名": r.get("subject", ""),
             "ステータス": "✅ 正常" if r.get("subject") != "ERROR" else "❌ エラー",
-        })
-
+        }
+        for r in results
+    ]
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
     st.divider()
 
-    # 各メールの詳細をexpanderで表示
+    # 各メール詳細（折りたたみ）
     st.markdown("#### メール詳細")
     for r in results:
         rank = r.get("lead_rank", "")
         label = f"{r.get('visitor_name')}（{r.get('company_name')}） [{rank}]"
-
         with st.expander(label):
             st.markdown(f"**件名:** {r.get('subject', '')}")
             st.text_area(
@@ -428,11 +638,8 @@ def _render_tab_history() -> None:
 
     # CSVダウンロード
     st.markdown("#### CSVダウンロード")
-
-    # ダウンロード用DataFrameを作成（ref_* はリストなので文字列化）
-    download_rows = []
-    for r in results:
-        download_rows.append({
+    download_rows = [
+        {
             "lead_id": r.get("lead_id", ""),
             "visitor_name": r.get("visitor_name", ""),
             "company_name": r.get("company_name", ""),
@@ -443,12 +650,14 @@ def _render_tab_history() -> None:
             "cta": r.get("cta", ""),
             "ref_tech_docs": ", ".join(r.get("ref_tech_docs", [])),
             "ref_crm": ", ".join(r.get("ref_crm", [])),
-        })
-
-    csv_df = pd.DataFrame(download_rows)
-    # Excel で文字化けしないよう UTF-8 BOM 付きで出力
-    csv_bytes = csv_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-
+        }
+        for r in results
+    ]
+    csv_bytes = (
+        pd.DataFrame(download_rows)
+        .to_csv(index=False, encoding="utf-8-sig")
+        .encode("utf-8-sig")
+    )
     st.download_button(
         label="📥 生成結果をCSVでダウンロード",
         data=csv_bytes,
@@ -465,48 +674,49 @@ def _render_tab_history() -> None:
 def main() -> None:
     """Streamlitアプリのメイン関数"""
 
-    # ページ設定
     st.set_page_config(
         page_title="NTX 展示会フォローアップエージェント",
         page_icon="🏭",
         layout="wide",
     )
 
-    # session_state 初期化
     _init_session_state()
 
-    # コンポーネント初期化（APIキーチェック含む）
     if not _initialize_components():
-        st.stop()  # APIキー未設定の場合はここで停止
+        st.stop()
 
-    # タイトル
     st.title("🏭 NTX 展示会フォローアップエージェント")
     st.caption(
         "製造業DX展示会のリード情報をもとに、商談確度・関心製品・過去商談記録を踏まえた"
         "パーソナライズされたフォローアップメールを自動生成します。"
     )
 
-    # リードデータ読み込み
-    try:
-        leads_df = load_leads(Config.LEADS_CSV_PATH)
-    except FileNotFoundError as e:
-        st.error(f"リードデータが見つかりません: {e}")
-        st.stop()
-
     # サイドバーを描画して選択ランクを取得
-    selected_ranks = _render_sidebar(leads_df)
+    selected_ranks = _render_sidebar()
 
-    # 3タブ構成
-    tab1, tab2, tab3 = st.tabs(["📋 リード一覧", "✉️ メール生成", "📊 生成履歴・ダウンロード"])
+    # ── メインエリアの表示切り替え ──────────────────────────────
+    leads_df: Optional[pd.DataFrame] = st.session_state.get("leads_df")
+    mapping_confirmed: bool = st.session_state.get("mapping_confirmed", False)
+    raw_uploaded_df: Optional[pd.DataFrame] = st.session_state.get("raw_uploaded_df")
 
-    with tab1:
-        _render_tab_leads(leads_df, selected_ranks)
+    if not mapping_confirmed and raw_uploaded_df is None:
+        # ① データ未読み込み: ウェルカム画面を表示
+        _render_welcome()
 
-    with tab2:
-        _render_tab_email(leads_df, selected_ranks)
+    elif not mapping_confirmed and raw_uploaded_df is not None:
+        # ② CSVアップロード済みだがマッピング未確定: マッピングUIを表示
+        _render_column_mapping()
 
-    with tab3:
-        _render_tab_history()
+    else:
+        # ③ マッピング確定済み: 通常の3タブUIを表示
+        tab1, tab2, tab3 = st.tabs(["📋 リード一覧", "✉️ メール生成", "📊 生成履歴・ダウンロード"])
+
+        with tab1:
+            _render_tab_leads(leads_df, selected_ranks)
+        with tab2:
+            _render_tab_email(leads_df, selected_ranks)
+        with tab3:
+            _render_tab_history()
 
 
 if __name__ == "__main__":

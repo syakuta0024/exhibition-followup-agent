@@ -244,6 +244,18 @@ class EmailGenerator:
 {tech_context}
 """
 
+        # extra_ プレフィックスのカラム（独自アンケート等）を追加情報として収集
+        extra_info_lines = []
+        for key, val in lead.items():
+            if key.startswith("extra_") and str(val).strip():
+                # "extra_" を除いた元のカラム名で表示
+                label = key[len("extra_"):]
+                extra_info_lines.append(f"- {label}: {val}")
+
+        extra_section = ""
+        if extra_info_lines:
+            extra_section = "\n## 追加情報（アンケート・独自項目）\n" + "\n".join(extra_info_lines) + "\n"
+
         prompt = f"""以下のお客様情報をもとにフォローアップメールを作成してください。
 
 ## お客様情報
@@ -255,7 +267,7 @@ class EmailGenerator:
 - ご関心製品: {products_str}
 - 今後のご要望: {lead.get('future_requests', '（なし）')}
 - 展示会での会話メモ: {lead.get('memo', '（なし）')}
-{crm_section}{tech_section}
+{extra_section}{crm_section}{tech_section}
 ## メール作成方針
 - ランク: {lead.get('lead_rank', 'C')} ({policy['label']})
 - トーン: {policy['tone']}
