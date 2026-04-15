@@ -8,3 +8,4 @@ streamlit
 python-dotenv
 pandas
 rank_bm25
+rapidfuzz

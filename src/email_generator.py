@@ -5,7 +5,7 @@ OpenAI GPT (gpt-5.4-nano) を使い、商談確度・関心製品・顧客属性
 パーソナライズされたフォローアップメールを生成する。
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -151,6 +151,7 @@ class EmailGenerator:
         lead: Dict[str, Any],
         tech_context: str = "",
         crm_context: str = "",
+        crm_structured: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, str]:
         """
         フォローアップメールを生成する。
@@ -162,7 +163,10 @@ class EmailGenerator:
         tech_context : str
             ベクトルDB検索で取得した技術資料テキスト
         crm_context : str
-            ベクトルDB検索で取得したCRM記録テキスト
+            ベクトルDB検索で取得したCRM記録テキスト（テキスト形式）
+        crm_structured : Dict[str, Any], optional
+            CRM CSV から取得した構造化商談データ。
+            存在する場合はテキスト形式のcrm_contextより優先して使用される。
 
         Returns
         -------
@@ -179,7 +183,9 @@ class EmailGenerator:
 
         # プロンプト組み立て
         system_prompt = self._build_system_prompt()
-        human_prompt = self._build_human_prompt(lead, policy, tech_context, crm_context)
+        human_prompt = self._build_human_prompt(
+            lead, policy, tech_context, crm_context, crm_structured
+        )
 
         # LLM呼び出し
         try:
@@ -224,37 +230,73 @@ class EmailGenerator:
         policy: Dict[str, str],
         tech_context: str,
         crm_context: str,
+        crm_structured: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """ユーザープロンプトを組み立てる"""
+        """
+        ユーザープロンプトを組み立てる。
+
+        CRM情報の優先順位:
+        1. crm_structured（CRM CSV由来の構造化データ） → 詳細な構造化セクションとして出力
+        2. crm_context（vectordb由来のテキスト） → 従来通りのテキストセクションとして出力
+        """
         products = parse_interested_products(str(lead.get("interested_products", "")))
         products_str = "、".join(products) if products else "（未記載）"
 
-        # CRM過去履歴の有無に応じてセクションを出し分け
+        # ── CRMセクション: 構造化データ優先 ──────────────────────
         crm_section = ""
-        if crm_context.strip():
-            crm_section = f"""
-## 過去のCRM商談履歴（参考）
-{crm_context}
-"""
 
+        if crm_structured and any(v.strip() for v in crm_structured.values() if isinstance(v, str)):
+            # CRM CSV から取得した構造化データを詳細フォーマットで出力
+            lines = ["## 過去のCRM商談情報（CSV連携）"]
+            if crm_structured.get("last_contact_date"):
+                lines.append(f"- 最終商談日: {crm_structured['last_contact_date']}")
+            if crm_structured.get("deal_stage"):
+                lines.append(f"- 商談ステージ: {crm_structured['deal_stage']}")
+            if crm_structured.get("win_probability"):
+                lines.append(f"- 受注確度: {crm_structured['win_probability']}")
+            if crm_structured.get("expected_amount"):
+                lines.append(f"- 受注予定額: {crm_structured['expected_amount']}")
+            if crm_structured.get("products_discussed"):
+                lines.append(f"- 提案済み製品: {crm_structured['products_discussed']}")
+            if crm_structured.get("assigned_sales"):
+                lines.append(f"- 担当営業: {crm_structured['assigned_sales']}")
+            if crm_structured.get("competitor"):
+                lines.append(f"- 競合: {crm_structured['competitor']}")
+            if crm_structured.get("next_action"):
+                lines.append(f"- 次回アクション: {crm_structured['next_action']}")
+            if crm_structured.get("crm_memo"):
+                # 300文字上限で商談メモを含める
+                memo = crm_structured["crm_memo"][:300]
+                lines.append(f"- 商談メモ: {memo}")
+            crm_section = "\n".join(lines) + "\n"
+
+        elif crm_context.strip():
+            # vectordb 由来のテキスト形式のCRM情報（後方互換）
+            crm_section = f"## 過去のCRM商談履歴（参考）\n{crm_context}\n"
+
+        # ── 技術資料セクション ───────────────────────────────────
         tech_section = ""
         if tech_context.strip():
-            tech_section = f"""
-## 関心製品の技術資料（参考）
-{tech_context}
-"""
+            tech_section = f"## 関心製品の技術資料（参考）\n{tech_context}\n"
 
-        # extra_ プレフィックスのカラム（独自アンケート等）を追加情報として収集
+        # ── 追加情報セクション（独自アンケート等）───────────────────
         extra_info_lines = []
         for key, val in lead.items():
             if key.startswith("extra_") and str(val).strip():
-                # "extra_" を除いた元のカラム名で表示
-                label = key[len("extra_"):]
+                label = key[len("extra_"):]  # "extra_" プレフィックスを除いた元のカラム名
                 extra_info_lines.append(f"- {label}: {val}")
 
         extra_section = ""
         if extra_info_lines:
-            extra_section = "\n## 追加情報（アンケート・独自項目）\n" + "\n".join(extra_info_lines) + "\n"
+            extra_section = "## 追加情報（アンケート・独自項目）\n" + "\n".join(extra_info_lines) + "\n"
+
+        # ── セクション結合 ────────────────────────────────────────
+        # 各セクションを改行で区切って結合（空のセクションはスキップ）
+        context_sections = "\n".join(
+            s for s in [extra_section, crm_section, tech_section] if s.strip()
+        )
+        if context_sections:
+            context_sections = "\n" + context_sections
 
         prompt = f"""以下のお客様情報をもとにフォローアップメールを作成してください。
 
@@ -267,7 +309,7 @@ class EmailGenerator:
 - ご関心製品: {products_str}
 - 今後のご要望: {lead.get('future_requests', '（なし）')}
 - 展示会での会話メモ: {lead.get('memo', '（なし）')}
-{extra_section}{crm_section}{tech_section}
+{context_sections}
 ## メール作成方針
 - ランク: {lead.get('lead_rank', 'C')} ({policy['label']})
 - トーン: {policy['tone']}

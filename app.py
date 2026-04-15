@@ -2,14 +2,19 @@
 Streamlitアプリケーション エントリーポイント
 
 NTX株式会社 展示会フォローアップエージェントのWebUI。
-CSVアップロード → カラムマッピング → メール生成 → ダウンロード のフローを提供する。
+CSVアップロード → カラムマッピング → CRM連携（任意）→ メール生成 → ダウンロード のフローを提供する。
 
 対応CSVフォーマット:
   - Lead Manager, Q-PASS, Sansan, 自社タブレット等の各種エクスポート形式
   - エンコーディング: UTF-8 / UTF-8 BOM / Shift_JIS / CP932
+
+CRM連携:
+  - Salesforce, kintone, HubSpot 等のエクスポートCSVに対応
+  - 会社名のファジーマッチング（rapidfuzz）で自動紐付け
+  - CRM CSV がない場合は従来のvectordb検索にフォールバック
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -53,15 +58,20 @@ def _init_session_state() -> None:
         "agent": None,              # FollowUpAgent インスタンス
         "email_gen": None,          # EmailGenerator インスタンス
         "db_built": False,          # ナレッジベース構築済みフラグ
-        # データ管理
-        "leads_df": None,           # マッピング確定後の標準化DataFrame
-        "raw_uploaded_df": None,    # アップロード直後の生DataFrame
-        "auto_mapping": {},         # 自動推定マッピング辞書
-        "mapping_confirmed": False, # カラムマッピング確定フラグ
-        "data_source": None,        # "upload" or "demo"
+        # リードデータ管理
+        "leads_df": None,               # マッピング確定後の標準化DataFrame
+        "raw_uploaded_df": None,        # アップロード直後の生DataFrame
+        "auto_mapping": {},             # 自動推定マッピング辞書
+        "mapping_confirmed": False,     # カラムマッピング確定フラグ
+        "data_source": None,            # "upload" or "demo"
+        # CRMデータ管理
+        "crm_df": None,                 # マッピング確定後のCRM DataFrame（標準カラム名）
+        "raw_crm_df": None,             # アップロード直後の生CRM DataFrame
+        "crm_auto_mapping": {},         # CRMの自動推定マッピング辞書
+        "crm_mapping_confirmed": False, # CRMカラムマッピング確定フラグ
         # 生成結果
-        "results": [],              # 一括生成結果リスト
-        "single_result": None,      # 単一メール生成結果
+        "results": [],                  # 一括生成結果リスト
+        "single_result": None,          # 単一メール生成結果
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -204,7 +214,12 @@ def _render_sidebar() -> List[str]:
 
         st.divider()
 
-        # ── セクション3: 商談確度フィルター（データ読み込み後のみ）──
+        # ── セクション3: CRM情報の連携（任意）──────────────────────
+        _render_crm_sidebar_section()
+
+        st.divider()
+
+        # ── セクション4: 商談確度フィルター（データ読み込み後のみ）──
         if st.session_state["mapping_confirmed"] and st.session_state["leads_df"] is not None:
             leads_df = st.session_state["leads_df"]
             st.markdown("#### 🎯 商談確度フィルター")
@@ -223,6 +238,142 @@ def _render_sidebar() -> List[str]:
         st.caption("NTX株式会社 展示会フォローアップシステム")
 
     return selected_ranks
+
+
+# ---------------------------------------------------------------
+# CRM連携サイドバーセクション
+# ---------------------------------------------------------------
+def _render_crm_sidebar_section() -> None:
+    """
+    サイドバーにCRM CSV連携セクションを描画する。
+
+    - CRM CSVアップロード / デモCRMデータボタン
+    - アップロード後: カラムマッピングフォーム（expander内）
+    - 確定後: 連携済み表示 + リセットボタン
+    """
+    st.markdown("#### 📂 CRM情報の連携（任意）")
+    st.caption("Salesforce/kintone等のCSVを会社名で自動紐付けします")
+
+    # CRM CSV ファイルアップロード
+    crm_uploaded_file = st.file_uploader(
+        "CRM CSVをアップロード",
+        type=["csv"],
+        key="crm_csv_uploader",
+        help="Salesforce, kintone, HubSpot等のエクスポートCSVに対応。\n会社名カラムで展示会リードと自動紐付けします。",
+    )
+
+    # 新しいCRM CSVが選択された場合: マッピングをリセットして読み込む
+    if crm_uploaded_file is not None:
+        if crm_uploaded_file.name != st.session_state.get("_last_crm_filename"):
+            st.session_state["_last_crm_filename"] = crm_uploaded_file.name
+            st.session_state["crm_mapping_confirmed"] = False
+            st.session_state["crm_df"] = None
+            try:
+                raw_crm = load_csv_with_encoding(crm_uploaded_file)
+                st.session_state["raw_crm_df"] = raw_crm
+                # CRM必須・任意フィールドでカラムマッピングを自動推定
+                all_crm_fields = {**Config.CRM_REQUIRED_FIELDS, **Config.CRM_OPTIONAL_FIELDS}
+                st.session_state["crm_auto_mapping"] = auto_map_columns(
+                    list(raw_crm.columns), all_crm_fields
+                )
+            except ValueError as e:
+                st.error(str(e))
+                st.session_state["raw_crm_df"] = None
+
+    # デモCRMデータ読み込みボタン
+    if st.button("🗃️ デモCRMデータを使う", use_container_width=True, key="crm_demo_btn",
+                 help="data/crm_demo.csv（10社分のサンプル商談データ）を読み込みます"):
+        _load_demo_crm()
+
+    # ── CRM連携状態の表示 ─────────────────────────────────────
+    if st.session_state["crm_mapping_confirmed"] and st.session_state["crm_df"] is not None:
+        crm_df = st.session_state["crm_df"]
+        st.success(f"✅ CRM連携済み: {len(crm_df)}社のデータ")
+        if st.button("🔄 CRM連携をリセット", use_container_width=True, key="crm_reset_btn"):
+            st.session_state["crm_df"] = None
+            st.session_state["raw_crm_df"] = None
+            st.session_state["crm_auto_mapping"] = {}
+            st.session_state["crm_mapping_confirmed"] = False
+            st.session_state["_last_crm_filename"] = None
+            st.rerun()
+
+    elif st.session_state["raw_crm_df"] is not None and not st.session_state["crm_mapping_confirmed"]:
+        # CRMアップロード済みだがマッピング未確定: コンパクトなフォームを表示
+        raw_crm_df = st.session_state["raw_crm_df"]
+        crm_auto_mapping = st.session_state["crm_auto_mapping"]
+
+        with st.expander("⚙️ CRMカラムマッピングを確認", expanded=True):
+            st.caption(f"読み込んだCSV: {len(raw_crm_df)}行 / {len(raw_crm_df.columns)}カラム")
+
+            crm_col_options = [NO_MAPPING_LABEL] + list(raw_crm_df.columns)
+
+            with st.form("crm_mapping_form"):
+                crm_selections: Dict[str, Optional[str]] = {}
+
+                # 必須フィールド（顧客企業名）
+                st.markdown("**🔴 必須: 顧客企業名（紐付けキー）**")
+                req_field_key = "company_name"
+                req_field_def = Config.CRM_REQUIRED_FIELDS[req_field_key]
+                current = crm_auto_mapping.get(req_field_key)
+                default_idx = crm_col_options.index(current) if current in crm_col_options else 0
+                crm_selections[req_field_key] = st.selectbox(
+                    label=f"{req_field_def['label']} `{req_field_key}`",
+                    options=crm_col_options,
+                    index=default_idx,
+                    key="crm_req_company_name",
+                    help=req_field_def.get("description", ""),
+                )
+                if crm_selections[req_field_key] == NO_MAPPING_LABEL:
+                    crm_selections[req_field_key] = None
+
+                # 任意フィールド
+                st.markdown("**🔵 任意フィールド**")
+                for field_key, field_def in Config.CRM_OPTIONAL_FIELDS.items():
+                    current = crm_auto_mapping.get(field_key)
+                    default_idx = crm_col_options.index(current) if current in crm_col_options else 0
+                    selected = st.selectbox(
+                        label=f"{field_def['label']} `{field_key}`",
+                        options=crm_col_options,
+                        index=default_idx,
+                        key=f"crm_opt_{field_key}",
+                    )
+                    crm_selections[field_key] = None if selected == NO_MAPPING_LABEL else selected
+
+                # 確定ボタン
+                if st.form_submit_button("✅ CRMマッピング確定", type="primary", use_container_width=True):
+                    if crm_selections.get("company_name") is None:
+                        st.warning("⚠️ 顧客企業名（紐付けキー）をマッピングしてください")
+                    else:
+                        all_crm_fields = {**Config.CRM_REQUIRED_FIELDS, **Config.CRM_OPTIONAL_FIELDS}
+                        crm_df = apply_column_mapping(raw_crm_df, crm_selections)
+                        st.session_state["crm_df"] = crm_df
+                        st.session_state["crm_mapping_confirmed"] = True
+                        st.toast(f"✅ CRM連携確定: {len(crm_df)}社", icon="📂")
+                        st.rerun()
+
+
+def _load_demo_crm() -> None:
+    """デモCRMデータ（data/crm_demo.csv）を読み込んでマッピングを適用する"""
+    import os
+    crm_path = "data/crm_demo.csv"
+    if not os.path.exists(crm_path):
+        st.error(f"デモCRMデータが見つかりません: {crm_path}")
+        return
+    try:
+        raw_crm = pd.read_csv(crm_path, dtype=str, encoding="utf-8-sig").fillna("")
+        # CRM必須・任意フィールドで自動マッピング
+        all_crm_fields = {**Config.CRM_REQUIRED_FIELDS, **Config.CRM_OPTIONAL_FIELDS}
+        mapping = auto_map_columns(list(raw_crm.columns), all_crm_fields)
+        crm_df = apply_column_mapping(raw_crm, mapping)
+        st.session_state["crm_df"] = crm_df
+        st.session_state["raw_crm_df"] = raw_crm
+        st.session_state["crm_auto_mapping"] = mapping
+        st.session_state["crm_mapping_confirmed"] = True
+        st.session_state["_last_crm_filename"] = "crm_demo.csv"
+        st.toast(f"✅ デモCRMデータを読み込みました（{len(crm_df)}社）", icon="🗃️")
+        st.rerun()
+    except Exception as e:
+        st.error(f"デモCRMデータの読み込みエラー: {e}")
 
 
 # ---------------------------------------------------------------
@@ -496,11 +647,13 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             st.error("ナレッジベースを先に構築してください。")
         else:
             agent: FollowUpAgent = st.session_state["agent"]
+            # CRM CSV がある場合はファジーマッチング、ない場合は vectordb にフォールバック
+            crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
             visitor = selected_lead.get("visitor_name", "")
             company = selected_lead.get("company_name", "")
             with st.spinner(f"{visitor}様（{company}）のメールを生成中..."):
                 try:
-                    result = agent.process_lead(selected_lead)
+                    result = agent.process_lead(selected_lead, crm_df=crm_df)
                     st.session_state["single_result"] = result
                     st.toast("✅ メール生成が完了しました", icon="✉️")
                 except Exception as e:
@@ -521,6 +674,46 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             key="edit_cta",
             help="LLMが生成した、営業担当者が次に実行すべきアクションの指示です。メール本文には含まれません。",
         )
+
+        # ── CRM紐付け結果の表示 ────────────────────────────────
+        crm_structured: Optional[Dict[str, Any]] = result.get("crm_structured")
+        crm_source = result.get("crm_source", "none")
+        crm_score = result.get("crm_match_score", 0)
+
+        with st.expander("📋 CRM情報（紐付け結果）"):
+            if crm_structured and crm_source == "csv":
+                # CRM CSV からのマッチ結果を構造化表示
+                st.caption(f"取得元: CRM CSV  |  マッチスコア: {crm_score}/100")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("商談ステージ", crm_structured.get("deal_stage") or "－")
+                col2.metric("受注確度", crm_structured.get("win_probability") or "－")
+                col3.metric("受注予定額", crm_structured.get("expected_amount") or "－")
+
+                info_rows = {
+                    "最終商談日":   crm_structured.get("last_contact_date", ""),
+                    "提案済み製品": crm_structured.get("products_discussed", ""),
+                    "担当営業":     crm_structured.get("assigned_sales", ""),
+                    "競合情報":     crm_structured.get("competitor", ""),
+                    "次回アクション": crm_structured.get("next_action", ""),
+                }
+                for label, val in info_rows.items():
+                    if val:
+                        st.markdown(f"**{label}:** {val}")
+
+                if crm_structured.get("crm_memo"):
+                    st.markdown("**商談メモ:**")
+                    st.text(crm_structured["crm_memo"][:300])
+
+            elif crm_source == "vectordb":
+                st.caption("取得元: ナレッジベース（vectordb）")
+                ref_crm = result.get("ref_crm", [])
+                if ref_crm:
+                    for f in ref_crm:
+                        st.markdown(f"- `{f}`")
+                else:
+                    st.caption("該当するCRM記録なし")
+            else:
+                st.caption("CRM情報: 該当なし")
 
         with st.expander("📚 参照資料の詳細"):
             col1, col2 = st.columns(2)
@@ -557,7 +750,8 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                 progress_bar.progress(i / total, text=f"生成中... {i}/{total}件")
 
                 try:
-                    result = agent.process_lead(lead)
+                    crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
+                    result = agent.process_lead(lead, crm_df=crm_df)
                     results.append(result)
                 except Exception as e:
                     results.append({
