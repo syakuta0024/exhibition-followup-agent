@@ -37,117 +37,136 @@ class Config:
     CHUNK_OVERLAP: int = 150       # チャンク間のオーバーラップ文字数
 
     # ---------------------------------------------------------------
-    # CSVカラムマッピング定義
-    # 様々な展示会管理ツール（Lead Manager, Q-PASS, Sansan等）の
-    # 異なるカラム名に対応するための候補リスト
+    # リードCSVカラムマッピング定義
+    # RX Japan Lead Manager / Q-PASS / Sansan 等の異なるカラム名に対応。
+    # 未マッピングのカスタム質問列は extra_ プレフィックスで自動保持され、
+    # メール生成のコンテキストに自動活用されます（Lead Managerのカスタム質問に対応）。
     # ---------------------------------------------------------------
 
     # 必須フィールド: メール生成に最低限必要な項目
     REQUIRED_FIELDS: dict = {
         "visitor_name": {
             "label": "氏名",
-            "description": "来場者の氏名",
-            "候補カラム名": ["氏名", "名前", "お名前", "Name", "visitor_name", "担当者名", "来場者名"],
+            "description": "来場者の氏名（姓名は1列・非分離）",
+            "候補カラム名": ["氏名", "名前", "お名前", "担当者名", "来場者名", "Full name", "Name", "visitor_name"],
         },
         "company_name": {
             "label": "会社名",
             "description": "来場者の所属企業名",
-            "候補カラム名": ["会社名", "企業名", "Company", "company_name", "組織名", "所属"],
+            "候補カラム名": ["会社名", "所属会社", "企業名", "組織名", "Company name", "Company", "company_name"],
         },
         "email": {
             "label": "メールアドレス",
             "description": "連絡先メールアドレス",
-            "候補カラム名": ["メール", "Email", "email", "E-mail", "メールアドレス", "mail"],
+            "候補カラム名": ["メールアドレス", "メール", "メアド", "E-mail", "Email", "email", "mail"],
         },
     }
 
-    # 任意フィールド: あれば活用する項目
+    # 任意フィールド: あれば活用する項目（Lead Manager固定列 + カスタム質問の共通候補）
     OPTIONAL_FIELDS: dict = {
         "department": {
-            "label": "部署",
-            "候補カラム名": ["部署", "部署名", "Department", "department", "所属部署"],
+            "label": "所属部署",
+            "候補カラム名": ["所属部署", "部署", "部署名", "Department", "department"],
         },
         "job_title": {
             "label": "役職",
-            "候補カラム名": ["役職", "職位", "Title", "job_title", "肩書"],
-        },
-        "lead_rank": {
-            "label": "商談確度",
-            "候補カラム名": ["確度", "ランク", "Rank", "lead_rank", "評価", "商談確度", "リード評価"],
-        },
-        "interested_products": {
-            "label": "関心製品",
-            "候補カラム名": ["関心製品", "興味", "関心", "Products", "interested_products", "ご興味", "展示物"],
-        },
-        "memo": {
-            "label": "営業メモ",
-            "候補カラム名": ["メモ", "備考", "Notes", "memo", "コメント", "会話メモ", "商談メモ", "ノート"],
-        },
-        "future_requests": {
-            "label": "今後のご要望",
-            "候補カラム名": ["要望", "ご要望", "Requests", "future_requests", "今後の希望"],
-        },
-        "visit_date": {
-            "label": "来場日",
-            "候補カラム名": ["来場日", "訪問日", "Date", "visit_date", "日付"],
+            "候補カラム名": ["役職", "職位", "Job title", "Title", "Position", "job_title", "肩書"],
         },
         "phone": {
             "label": "電話番号",
-            "候補カラム名": ["電話", "TEL", "Phone", "phone", "電話番号"],
+            "候補カラム名": ["電話番号", "電話", "TEL", "Phone", "Tel", "phone"],
+        },
+        "address": {
+            "label": "住所",
+            "候補カラム名": ["住所", "会社所在地", "所在地", "Address", "address"],
+        },
+        "lead_rank": {
+            "label": "評価",
+            "候補カラム名": ["評価", "ランク", "商談確度", "Rating", "Rank", "lead_rank", "リード評価"],
+        },
+        "memo": {
+            "label": "メモ",
+            "候補カラム名": ["メモ", "フリーコメント", "備考", "Notes", "Memo", "memo", "コメント"],
+        },
+        "visit_date": {
+            "label": "来場日",
+            "候補カラム名": ["来場日", "訪問日", "登録日", "Visit date", "Date", "visit_date"],
+        },
+        "interested_products": {
+            "label": "関心製品",
+            "候補カラム名": ["関心製品", "Products of interest", "興味", "関心", "Products", "interested_products", "ご興味"],
+        },
+        "future_requests": {
+            "label": "今後のご要望",
+            "候補カラム名": ["要望", "ご要望", "今後の希望", "Requests", "future_requests"],
         },
     }
 
     # ---------------------------------------------------------------
     # CRM CSVカラムマッピング定義
-    # Salesforce, kintone, HubSpot 等のエクスポートCSVに対応
+    # HubSpot Contacts エクスポート形式に準拠。
+    # email（完全一致）→ company_name（ファジーマッチ）の2段階で紐付けを行う。
     # ---------------------------------------------------------------
 
-    # CRM必須フィールド: リードとの紐付けキー
+    # CRM必須フィールド: リードとの紐付けキー（いずれか1つ以上をマッピング）
     CRM_REQUIRED_FIELDS: dict = {
+        "email": {
+            "label": "メールアドレス",
+            "description": "第1紐付けキー（完全一致でリードと照合）",
+            "候補カラム名": ["Email", "メールアドレス", "メール", "E-mail", "email", "メアド"],
+        },
         "company_name": {
-            "label": "顧客企業名",
-            "description": "リードとの紐付けキー（会社名でファジーマッチングを行う）",
-            "候補カラム名": ["顧客企業名", "会社名", "企業名", "Company", "取引先名", "顧客名"],
+            "label": "会社名",
+            "description": "第2紐付けキー（ファジーマッチングでリードと照合）",
+            "候補カラム名": ["Company name", "会社名", "企業名", "Company", "取引先名", "company_name"],
         },
     }
 
-    # CRM任意フィールド: メール生成コンテキストとして活用する商談情報
+    # CRM任意フィールド: HubSpot Contacts標準エクスポートフィールド
     CRM_OPTIONAL_FIELDS: dict = {
-        "last_contact_date": {
-            "label": "最終商談日",
-            "候補カラム名": ["最終商談日", "最終接触日", "最終活動日", "Last Contact", "更新日"],
+        "record_id": {
+            "label": "Record ID",
+            "候補カラム名": ["Record ID", "record_id", "コンタクトID", "ID"],
         },
-        "deal_stage": {
-            "label": "商談ステージ",
-            "候補カラム名": ["商談ステージ", "ステージ", "フェーズ", "Stage", "商談状況", "進捗"],
+        "first_name": {
+            "label": "First name",
+            "候補カラム名": ["First name", "first_name", "名", "ファーストネーム"],
         },
-        "win_probability": {
-            "label": "受注確度",
-            "候補カラム名": ["受注確度", "確度", "確率", "Probability", "受注確率"],
+        "last_name": {
+            "label": "Last name",
+            "候補カラム名": ["Last name", "last_name", "姓", "ラストネーム"],
         },
-        "expected_amount": {
-            "label": "受注予定額",
-            "候補カラム名": ["受注予定額", "金額", "予定額", "Amount", "見込金額"],
+        "phone": {
+            "label": "Phone number",
+            "候補カラム名": ["Phone number", "phone", "Phone", "電話番号", "TEL"],
         },
-        "products_discussed": {
-            "label": "議論した製品",
-            "候補カラム名": ["提案製品", "議論製品", "製品", "Products", "商材"],
+        "job_title": {
+            "label": "Job title",
+            "候補カラム名": ["Job title", "job_title", "役職", "Title", "職位"],
         },
-        "crm_memo": {
-            "label": "商談メモ",
-            "候補カラム名": ["商談メモ", "メモ", "備考", "Notes", "活動内容", "商談内容"],
+        "lifecycle_stage": {
+            "label": "Lifecycle stage",
+            "候補カラム名": ["Lifecycle stage", "lifecycle_stage", "ライフサイクルステージ", "フェーズ", "Stage"],
         },
-        "assigned_sales": {
-            "label": "担当営業",
-            "候補カラム名": ["担当営業", "担当者", "営業担当", "Owner", "担当"],
+        "lead_status": {
+            "label": "Lead status",
+            "候補カラム名": ["Lead status", "lead_status", "リードステータス", "ステータス"],
         },
-        "competitor": {
-            "label": "競合情報",
-            "候補カラム名": ["競合", "競合情報", "Competitor", "他社状況"],
+        "original_source": {
+            "label": "Original source",
+            "候補カラム名": ["Original source", "original_source", "ソース", "流入元", "獲得経路"],
         },
-        "next_action": {
-            "label": "次回アクション",
-            "候補カラム名": ["次回アクション", "TODO", "次のステップ", "Next Action"],
+        "contact_owner": {
+            "label": "Contact owner",
+            "候補カラム名": ["Contact owner", "contact_owner", "担当者", "Owner", "担当営業"],
+        },
+        "create_date": {
+            "label": "Create date",
+            "候補カラム名": ["Create date", "create_date", "登録日", "作成日"],
+        },
+        "last_activity_date": {
+            "label": "Last activity date",
+            "候補カラム名": ["Last activity date", "last_activity_date", "最終活動日", "最終接触日"],
         },
     }
 

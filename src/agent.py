@@ -103,15 +103,16 @@ class FollowUpAgent:
         crm_source = "none"
 
         if crm_df is not None and not crm_df.empty:
-            # ── 優先度1: CRM CSV ファジーマッチング ─────────────────
-            crm_structured, crm_match_score = self._match_crm_from_csv(company, crm_df)
+            # ── 優先度1: CRM CSV マッチング（Email優先→会社名ファジー）──
+            crm_structured, crm_match_score = self._match_crm_from_csv(lead, crm_df)
 
             if crm_structured:
-                crm_deal_stage = crm_structured.get("deal_stage", "")
+                crm_deal_stage = crm_structured.get("lifecycle_stage", "")
                 crm_source = "csv"
+                method = crm_structured.get("match_method", "")
                 logger.info(
                     f"  CRM CSV マッチ: スコア={crm_match_score}, "
-                    f"ステージ={crm_deal_stage}"
+                    f"方法={method}, ステージ={crm_deal_stage}"
                 )
             else:
                 logger.info("  CRM CSV: マッチなし（vectordbにフォールバック）")
@@ -151,16 +152,16 @@ class FollowUpAgent:
 
     def _match_crm_from_csv(
         self,
-        company: str,
+        lead: Dict[str, Any],
         crm_df: pd.DataFrame,
     ) -> tuple:
         """
-        CRM CSV から会社名でファジーマッチングを行い、構造化データを返す。
+        CRM CSV からリード情報で2段階マッチングを行い、構造化データを返す。
 
         Parameters
         ----------
-        company : str
-            リードの会社名
+        lead : Dict[str, Any]
+            リードデータ辞書（email / company_name を参照）
         crm_df : pd.DataFrame
             CRM商談データ（標準フィールド名に変換済み）
 
@@ -174,25 +175,29 @@ class FollowUpAgent:
         from src.crm_matcher import CRMMatcher
 
         matcher = CRMMatcher()
-        matched = matcher.match(company, crm_df, company_col="company_name")
+        matched = matcher.match(lead, crm_df)
 
         if not matched:
             return None, 0
 
         score = matched.get("_crm_match_score", 0)
+        match_method = matched.get("_crm_match_method", "")
 
-        # 標準フィールド名でマッピングされたCRMデータを構造化辞書に整理
+        # HubSpot標準フィールドをcrm_structured辞書に整理
         crm_structured = {
-            "last_contact_date":  str(matched.get("last_contact_date", "")),
-            "deal_stage":         str(matched.get("deal_stage", "")),
-            "win_probability":    str(matched.get("win_probability", "")),
-            "expected_amount":    str(matched.get("expected_amount", "")),
-            "products_discussed": str(matched.get("products_discussed", "")),
-            "crm_memo":           str(matched.get("crm_memo", ""))[:300],  # 300文字上限
-            "assigned_sales":     str(matched.get("assigned_sales", "")),
-            "competitor":         str(matched.get("competitor", "")),
-            "next_action":        str(matched.get("next_action", "")),
+            "last_activity_date": str(matched.get("last_activity_date", "")),
+            "lifecycle_stage":    str(matched.get("lifecycle_stage", "")),
+            "lead_status":        str(matched.get("lead_status", "")),
+            "contact_owner":      str(matched.get("contact_owner", "")),
+            "original_source":    str(matched.get("original_source", "")),
+            "create_date":        str(matched.get("create_date", "")),
+            "record_id":          str(matched.get("record_id", "")),
+            "first_name":         str(matched.get("first_name", "")),
+            "last_name":          str(matched.get("last_name", "")),
+            "phone":              str(matched.get("phone", "")),
+            "job_title":          str(matched.get("job_title", "")),
             "matched_company":    str(matched.get("company_name", "")),
+            "match_method":       match_method,
         }
 
         return crm_structured, score

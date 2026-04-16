@@ -246,28 +246,22 @@ class EmailGenerator:
         crm_section = ""
 
         if crm_structured and any(v.strip() for v in crm_structured.values() if isinstance(v, str)):
-            # CRM CSV から取得した構造化データを詳細フォーマットで出力
-            lines = ["## 過去のCRM商談情報（CSV連携）"]
-            if crm_structured.get("last_contact_date"):
-                lines.append(f"- 最終商談日: {crm_structured['last_contact_date']}")
-            if crm_structured.get("deal_stage"):
-                lines.append(f"- 商談ステージ: {crm_structured['deal_stage']}")
-            if crm_structured.get("win_probability"):
-                lines.append(f"- 受注確度: {crm_structured['win_probability']}")
-            if crm_structured.get("expected_amount"):
-                lines.append(f"- 受注予定額: {crm_structured['expected_amount']}")
-            if crm_structured.get("products_discussed"):
-                lines.append(f"- 提案済み製品: {crm_structured['products_discussed']}")
-            if crm_structured.get("assigned_sales"):
-                lines.append(f"- 担当営業: {crm_structured['assigned_sales']}")
-            if crm_structured.get("competitor"):
-                lines.append(f"- 競合: {crm_structured['competitor']}")
-            if crm_structured.get("next_action"):
-                lines.append(f"- 次回アクション: {crm_structured['next_action']}")
-            if crm_structured.get("crm_memo"):
-                # 300文字上限で商談メモを含める
-                memo = crm_structured["crm_memo"][:300]
-                lines.append(f"- 商談メモ: {memo}")
+            # CRM CSV から取得した構造化データ（HubSpot形式）を詳細フォーマットで出力
+            match_method = crm_structured.get("match_method", "")
+            method_label = "メール一致" if match_method == "email" else "会社名マッチ"
+            lines = [f"## 過去のCRM情報（HubSpot連携 / 紐付け: {method_label}）"]
+            if crm_structured.get("lifecycle_stage"):
+                lines.append(f"- ライフサイクルステージ: {crm_structured['lifecycle_stage']}")
+            if crm_structured.get("lead_status"):
+                lines.append(f"- リードステータス: {crm_structured['lead_status']}")
+            if crm_structured.get("last_activity_date"):
+                lines.append(f"- 最終接触日: {crm_structured['last_activity_date']}")
+            if crm_structured.get("create_date"):
+                lines.append(f"- 初回登録日: {crm_structured['create_date']}")
+            if crm_structured.get("original_source"):
+                lines.append(f"- 獲得経路: {crm_structured['original_source']}")
+            if crm_structured.get("contact_owner"):
+                lines.append(f"- 担当者: {crm_structured['contact_owner']}")
             crm_section = "\n".join(lines) + "\n"
 
         elif crm_context.strip():

@@ -553,6 +553,85 @@ class VectorDBManager:
         # BM25コーパスもクリア
         self._bm25_corpus = []
 
+    def add_pdf(self, pdf_file, source_name: str = None) -> int:
+        """
+        PDFファイルを読み込み、テキスト抽出→チャンク分割→ベクトルDBに追加する。
+
+        既存のContextual Retrieval機構を活用し、技術資料（tech_doc）として追加する。
+        追加後は BM25 コーパスにも反映されるため、ハイブリッド検索でも参照可能。
+
+        Parameters
+        ----------
+        pdf_file : file-like object
+            読み込むPDFファイル（Streamlitの UploadedFile など）
+        source_name : str, optional
+            ソースファイル名。未指定の場合は pdf_file.name または "unknown.pdf" を使用。
+
+        Returns
+        -------
+        int
+            追加したチャンク数。テキストが空の場合は 0。
+        """
+        try:
+            from pypdf import PdfReader
+        except ImportError as e:
+            raise ImportError(
+                "PDF取り込みには pypdf が必要です。`pip install pypdf` を実行してください。"
+            ) from e
+
+        import io
+
+        # ソース名の決定
+        if source_name is None:
+            source_name = getattr(pdf_file, "name", "unknown.pdf")
+        filename = os.path.basename(source_name)
+
+        # PDFテキスト抽出
+        raw_bytes = getattr(pdf_file, "getvalue", None)
+        if raw_bytes:
+            pdf_bytes = raw_bytes()
+        else:
+            pdf_bytes = pdf_file.read()
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text = "\n".join(
+            (page.extract_text() or "").strip()
+            for page in reader.pages
+        ).strip()
+
+        if not text:
+            print(f"  警告: '{filename}' からテキストを抽出できませんでした（スキャンPDF等）")
+            return 0
+
+        # メタデータ構築（tech_doc として扱う）
+        base_name = os.path.splitext(filename)[0]
+        metadata: Dict[str, Any] = {
+            "source_type": "tech_doc",
+            "source_file": filename,
+            "product_name": base_name,
+            "product_category": "その他",
+            "target_industries": "製造業",
+            "keywords": base_name,
+        }
+
+        # BM25コーパスに追加
+        self._bm25_corpus.append({"text": text, "metadata": metadata})
+
+        # チャンク分割 + Contextual Retrieval プレフィックス付加
+        first_line = text.split("\n")[0].strip()[:100]
+        chunks = self.text_splitter.create_documents(
+            texts=[text],
+            metadatas=[metadata],
+        )
+        for chunk in chunks:
+            context_prefix = _build_context_prefix(first_line, "tech_doc", metadata)
+            chunk.page_content = context_prefix + chunk.page_content
+
+        # ChromaDBに追加
+        self.vectorstore.add_documents(chunks)
+        print(f"  PDF追加完了: '{filename}' → {len(chunks)} チャンク")
+        return len(chunks)
+
     def _try_rebuild_bm25_corpus(self) -> None:
         """
         BM25コーパスをデフォルトのデータディレクトリから再構築する。

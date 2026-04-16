@@ -175,21 +175,31 @@ def _render_sidebar() -> List[str]:
 
         st.divider()
 
-        # デモデータ読み込みボタン
+        # デモデータ読み込みボタン（Lead Manager形式を優先）
         if st.button("🗂️ デモデータを使う", use_container_width=True,
-                     help="data/leads.csv のサンプルデータを読み込みます"):
+                     help="data/leads_rx_demo.csv（Lead Manager形式）を読み込みます"):
+            import os as _os
             try:
-                demo_df = load_leads(Config.LEADS_CSV_PATH)
+                rx_path = "data/leads_rx_demo.csv"
+                if _os.path.exists(rx_path):
+                    import pandas as _pd2
+                    raw_demo = _pd2.read_csv(rx_path, dtype=str, encoding="utf-8-sig").fillna("")
+                    all_fields = {**Config.REQUIRED_FIELDS, **Config.OPTIONAL_FIELDS}
+                    mapping = auto_map_columns(list(raw_demo.columns), all_fields)
+                    demo_df = apply_column_mapping(raw_demo, mapping)
+                    st.toast("✅ デモデータを読み込みました（Lead Manager形式）", icon="🗂️")
+                else:
+                    demo_df = load_leads(Config.LEADS_CSV_PATH)
+                    st.toast("✅ デモデータを読み込みました", icon="🗂️")
                 st.session_state["leads_df"] = demo_df
                 st.session_state["raw_uploaded_df"] = None
                 st.session_state["mapping_confirmed"] = True
                 st.session_state["data_source"] = "demo"
                 st.session_state["results"] = []
                 st.session_state["single_result"] = None
-                st.toast("✅ デモデータを読み込みました", icon="🗂️")
                 st.rerun()
-            except FileNotFoundError as e:
-                st.error(f"デモデータが見つかりません: {e}")
+            except Exception as e:
+                st.error(f"デモデータの読み込みエラー: {e}")
 
         st.divider()
 
@@ -211,6 +221,35 @@ def _render_sidebar() -> List[str]:
                     st.rerun()
                 except Exception as e:
                     st.error(f"構築エラー: {e}")
+
+        # ── PDF アップロード ──────────────────────────────────────
+        st.markdown("#### 📄 製品資料PDFアップロード")
+        st.caption("PDFをアップロードしてナレッジベースに追加できます")
+        pdf_files = st.file_uploader(
+            "PDFをアップロード",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="pdf_uploader",
+            help="複数ファイルを同時にアップロード可能。追加後はメール生成時の参照資料として活用されます。",
+        )
+        if pdf_files and st.button("🔨 PDFをベクトルDBに追加", use_container_width=True, key="pdf_add_btn"):
+            db: VectorDBManager = st.session_state["vectordb"]
+            total_chunks = 0
+            added_count = 0
+            with st.spinner(f"{len(pdf_files)}件のPDFを取り込み中..."):
+                for pdf_file in pdf_files:
+                    try:
+                        chunks = db.add_pdf(pdf_file, source_name=pdf_file.name)
+                        total_chunks += chunks
+                        if chunks > 0:
+                            added_count += 1
+                    except Exception as e:
+                        st.warning(f"⚠️ '{pdf_file.name}' の取り込みに失敗: {e}")
+            if added_count > 0:
+                st.session_state["db_built"] = True
+                st.success(f"✅ {added_count}件のPDFを取り込みました（合計{total_chunks}チャンク）")
+            else:
+                st.warning("PDFからテキストを抽出できませんでした")
 
         st.divider()
 
@@ -280,9 +319,9 @@ def _render_crm_sidebar_section() -> None:
                 st.error(str(e))
                 st.session_state["raw_crm_df"] = None
 
-    # デモCRMデータ読み込みボタン
+    # デモCRMデータ読み込みボタン（HubSpot形式を優先）
     if st.button("🗃️ デモCRMデータを使う", use_container_width=True, key="crm_demo_btn",
-                 help="data/crm_demo.csv（10社分のサンプル商談データ）を読み込みます"):
+                 help="data/crm_hubspot_demo.csv（HubSpot形式）または crm_demo.csv を読み込みます"):
         _load_demo_crm()
 
     # ── CRM連携状態の表示 ─────────────────────────────────────
@@ -310,24 +349,22 @@ def _render_crm_sidebar_section() -> None:
             with st.form("crm_mapping_form"):
                 crm_selections: Dict[str, Optional[str]] = {}
 
-                # 必須フィールド（顧客企業名）
-                st.markdown("**🔴 必須: 顧客企業名（紐付けキー）**")
-                req_field_key = "company_name"
-                req_field_def = Config.CRM_REQUIRED_FIELDS[req_field_key]
-                current = crm_auto_mapping.get(req_field_key)
-                default_idx = crm_col_options.index(current) if current in crm_col_options else 0
-                crm_selections[req_field_key] = st.selectbox(
-                    label=f"{req_field_def['label']} `{req_field_key}`",
-                    options=crm_col_options,
-                    index=default_idx,
-                    key="crm_req_company_name",
-                    help=req_field_def.get("description", ""),
-                )
-                if crm_selections[req_field_key] == NO_MAPPING_LABEL:
-                    crm_selections[req_field_key] = None
+                # 必須フィールド（メール / 会社名 の2キー）
+                st.markdown("**🔴 紐付けキー** ※いずれか1つ以上マッピング（両方推奨）")
+                for req_field_key, req_field_def in Config.CRM_REQUIRED_FIELDS.items():
+                    current = crm_auto_mapping.get(req_field_key)
+                    default_idx = crm_col_options.index(current) if current in crm_col_options else 0
+                    selected = st.selectbox(
+                        label=f"{req_field_def['label']} `{req_field_key}`",
+                        options=crm_col_options,
+                        index=default_idx,
+                        key=f"crm_req_{req_field_key}",
+                        help=req_field_def.get("description", ""),
+                    )
+                    crm_selections[req_field_key] = None if selected == NO_MAPPING_LABEL else selected
 
-                # 任意フィールド
-                st.markdown("**🔵 任意フィールド**")
+                # 任意フィールド（HubSpot標準フィールド）
+                st.markdown("**🔵 任意フィールド（HubSpot標準）**")
                 for field_key, field_def in Config.CRM_OPTIONAL_FIELDS.items():
                     current = crm_auto_mapping.get(field_key)
                     default_idx = crm_col_options.index(current) if current in crm_col_options else 0
@@ -341,8 +378,12 @@ def _render_crm_sidebar_section() -> None:
 
                 # 確定ボタン
                 if st.form_submit_button("✅ CRMマッピング確定", type="primary", use_container_width=True):
-                    if crm_selections.get("company_name") is None:
-                        st.warning("⚠️ 顧客企業名（紐付けキー）をマッピングしてください")
+                    has_key = any(
+                        crm_selections.get(k) is not None
+                        for k in Config.CRM_REQUIRED_FIELDS
+                    )
+                    if not has_key:
+                        st.warning("⚠️ メールアドレスまたは会社名のいずれか1つ以上をマッピングしてください")
                     else:
                         all_crm_fields = {**Config.CRM_REQUIRED_FIELDS, **Config.CRM_OPTIONAL_FIELDS}
                         crm_df = apply_column_mapping(raw_crm_df, crm_selections)
@@ -353,11 +394,14 @@ def _render_crm_sidebar_section() -> None:
 
 
 def _load_demo_crm() -> None:
-    """デモCRMデータ（data/crm_demo.csv）を読み込んでマッピングを適用する"""
+    """デモCRMデータを読み込んでマッピングを適用する（HubSpot形式を優先）"""
     import os
-    crm_path = "data/crm_demo.csv"
+    # HubSpot形式を優先、なければ従来のcrm_demo.csvにフォールバック
+    crm_path = "data/crm_hubspot_demo.csv"
     if not os.path.exists(crm_path):
-        st.error(f"デモCRMデータが見つかりません: {crm_path}")
+        crm_path = "data/crm_demo.csv"
+    if not os.path.exists(crm_path):
+        st.error("デモCRMデータが見つかりません")
         return
     try:
         raw_crm = pd.read_csv(crm_path, dtype=str, encoding="utf-8-sig").fillna("")
@@ -369,8 +413,9 @@ def _load_demo_crm() -> None:
         st.session_state["raw_crm_df"] = raw_crm
         st.session_state["crm_auto_mapping"] = mapping
         st.session_state["crm_mapping_confirmed"] = True
-        st.session_state["_last_crm_filename"] = "crm_demo.csv"
-        st.toast(f"✅ デモCRMデータを読み込みました（{len(crm_df)}社）", icon="🗃️")
+        st.session_state["_last_crm_filename"] = os.path.basename(crm_path)
+        fname = os.path.basename(crm_path)
+        st.toast(f"✅ デモCRMデータを読み込みました（{len(crm_df)}社 / {fname}）", icon="🗃️")
         st.rerun()
     except Exception as e:
         st.error(f"デモCRMデータの読み込みエラー: {e}")
@@ -680,29 +725,30 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
         crm_source = result.get("crm_source", "none")
         crm_score = result.get("crm_match_score", 0)
 
-        with st.expander("📋 CRM情報（紐付け結果）"):
+        with st.expander("📋 CRM情報（HubSpot連携結果）"):
             if crm_structured and crm_source == "csv":
-                # CRM CSV からのマッチ結果を構造化表示
-                st.caption(f"取得元: CRM CSV  |  マッチスコア: {crm_score}/100")
+                # HubSpot CRM からのマッチ結果を構造化表示
+                match_method = crm_structured.get("match_method", "")
+                method_label = "メール一致" if match_method == "email" else "会社名マッチ"
+                st.caption(
+                    f"取得元: HubSpot CRM  |  紐付け: {method_label}  |  "
+                    f"マッチスコア: {crm_score}/100"
+                )
                 col1, col2, col3 = st.columns(3)
-                col1.metric("商談ステージ", crm_structured.get("deal_stage") or "－")
-                col2.metric("受注確度", crm_structured.get("win_probability") or "－")
-                col3.metric("受注予定額", crm_structured.get("expected_amount") or "－")
+                col1.metric("Lifecycle stage", crm_structured.get("lifecycle_stage") or "－")
+                col2.metric("Lead status", crm_structured.get("lead_status") or "－")
+                col3.metric("担当者", crm_structured.get("contact_owner") or "－")
 
                 info_rows = {
-                    "最終商談日":   crm_structured.get("last_contact_date", ""),
-                    "提案済み製品": crm_structured.get("products_discussed", ""),
-                    "担当営業":     crm_structured.get("assigned_sales", ""),
-                    "競合情報":     crm_structured.get("competitor", ""),
-                    "次回アクション": crm_structured.get("next_action", ""),
+                    "最終接触日":   crm_structured.get("last_activity_date", ""),
+                    "初回登録日":   crm_structured.get("create_date", ""),
+                    "獲得経路":     crm_structured.get("original_source", ""),
+                    "Record ID":    crm_structured.get("record_id", ""),
+                    "紐付け会社名": crm_structured.get("matched_company", ""),
                 }
                 for label, val in info_rows.items():
                     if val:
                         st.markdown(f"**{label}:** {val}")
-
-                if crm_structured.get("crm_memo"):
-                    st.markdown("**商談メモ:**")
-                    st.text(crm_structured["crm_memo"][:300])
 
             elif crm_source == "vectordb":
                 st.caption("取得元: ナレッジベース（vectordb）")

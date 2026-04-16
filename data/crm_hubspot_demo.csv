@@ -1,0 +1,11 @@
+Record ID,First name,Last name,Email,Phone number,Company name,Job title,Lifecycle stage,Lead status,Original source,Contact owner,Create date,Last activity date
+HB-001,太郎,山田,yamada@yamadaseisakusho.co.jp,03-1111-2222,山田製作所,生産技術部長,opportunity,in progress,展示会,大野 翔太,2026-02-10,2026-03-15
+HB-002,浩二,佐藤,sato@chubutekko.co.jp,052-3333-4444,中部鉄鋼工業株式会社,製造部工場長,opportunity,open,展示会,大野 翔太,2026-01-28,2026-02-20
+HB-003,美咲,橋本,hashimoto@kitakyushu-steel.co.jp,093-5555-6666,株式会社北九州特殊鋼,品質管理部長,opportunity,in progress,展示会,山田 花子,2025-12-05,2026-03-10
+HB-004,健一,鈴木,suzuki@toyoseiko.co.jp,044-7777-8888,東洋精工,情報システム部課長,lead,new,展示会,鈴木 一郎,2026-02-20,2026-03-01
+HB-005,洋介,山本,yamamoto@mikawagom.co.jp,0566-9999-0000,三河ゴム製造株式会社,生産管理部長,opportunity,in progress,展示会,大野 翔太,2026-03-01,2026-03-20
+HB-006,主幹,福田,fukuda@hj-works.co.jp,03-2222-3333,東日本重工業株式会社,製造技術部主幹,opportunity,in progress,展示会,大野 翔太,2025-11-15,2026-02-28
+HB-007,工場長,青木,aoki@tssk.co.jp,0749-4444-5555,東西精工,設備保全部工場長,lead,new,展示会,山田 花子,2026-01-10,2026-01-20
+HB-008,室長,西,nishi@nanboku.co.jp,06-6666-7777,南北工業株式会社,IT推進室長,lead,new,展示会,鈴木 一郎,2025-10-22,2025-11-05
+HB-009,担当,田中,info@abc-mfg.co.jp,03-9999-0000,ABCマニュファクチャリング,製造部担当,lead,new,ウェブサイト,大野 翔太,2026-01-05,2026-01-15
+HB-010,担当,佐々木,contact@xyz-factory.co.jp,06-0000-1111,XYZ工場,設備担当,lead,new,紹介,鈴木 一郎,2026-02-01,2026-02-10
