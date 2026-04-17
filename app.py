@@ -236,6 +236,7 @@ def _render_sidebar() -> List[str]:
             db: VectorDBManager = st.session_state["vectordb"]
             total_chunks = 0
             added_count = 0
+            has_import_error = False
             with st.spinner(f"{len(pdf_files)}件のPDFを取り込み中..."):
                 for pdf_file in pdf_files:
                     try:
@@ -243,13 +244,28 @@ def _render_sidebar() -> List[str]:
                         total_chunks += chunks
                         if chunks > 0:
                             added_count += 1
+                        else:
+                            st.warning(
+                                f"⚠️ '{pdf_file.name}' からテキストを抽出できませんでした。"
+                                "スキャンPDF（画像のみ）は現在非対応です。"
+                            )
+                    except ImportError:
+                        has_import_error = True
+                        st.error(
+                            "**pypdf がインストールされていません。**\n\n"
+                            "新しいターミナルウィンドウで以下を実行してください:\n\n"
+                            "```\npip install pypdf\n```\n\n"
+                            "インストール後、Streamlitを再起動してください。"
+                        )
+                        break  # 全ファイルで同じエラーになるので中断
                     except Exception as e:
                         st.warning(f"⚠️ '{pdf_file.name}' の取り込みに失敗: {e}")
             if added_count > 0:
                 st.session_state["db_built"] = True
                 st.success(f"✅ {added_count}件のPDFを取り込みました（合計{total_chunks}チャンク）")
-            else:
-                st.warning("PDFからテキストを抽出できませんでした")
+            elif not has_import_error and added_count == 0 and len(pdf_files) > 0:
+                # ImportError以外の理由で0件の場合のみ表示
+                pass  # 個別ファイルのメッセージで十分
 
         st.divider()
 
