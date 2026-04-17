@@ -152,6 +152,7 @@ class EmailGenerator:
         tech_context: str = "",
         crm_context: str = "",
         crm_structured: Optional[Dict[str, Any]] = None,
+        exhibition_info: Optional[Dict[str, str]] = None,
     ) -> Dict[str, str]:
         """
         フォローアップメールを生成する。
@@ -184,7 +185,7 @@ class EmailGenerator:
         # プロンプト組み立て
         system_prompt = self._build_system_prompt()
         human_prompt = self._build_human_prompt(
-            lead, policy, tech_context, crm_context, crm_structured
+            lead, policy, tech_context, crm_context, crm_structured, exhibition_info
         )
 
         # LLM呼び出し
@@ -231,6 +232,7 @@ class EmailGenerator:
         tech_context: str,
         crm_context: str,
         crm_structured: Optional[Dict[str, Any]] = None,
+        exhibition_info: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         ユーザープロンプトを組み立てる。
@@ -284,10 +286,22 @@ class EmailGenerator:
         if extra_info_lines:
             extra_section = "## 追加情報（アンケート・独自項目）\n" + "\n".join(extra_info_lines) + "\n"
 
+        # ── 展示会情報セクション ─────────────────────────────────
+        _ex = exhibition_info or {}
+        _ex_name = _ex.get("exhibition_name") or "展示会"
+        _ex_date = _ex.get("exhibition_date") or ""
+        _ex_venue = _ex.get("exhibition_venue") or ""
+        _ex_lines = ["## 展示会情報", f"- 展示会名: {_ex_name}"]
+        if _ex_date:
+            _ex_lines.append(f"- 開催日: {_ex_date}")
+        if _ex_venue:
+            _ex_lines.append(f"- 会場: {_ex_venue}")
+        exhibition_section = "\n".join(_ex_lines) + "\n"
+
         # ── セクション結合 ────────────────────────────────────────
-        # 各セクションを改行で区切って結合（空のセクションはスキップ）
         context_sections = "\n".join(
-            s for s in [extra_section, crm_section, tech_section] if s.strip()
+            s for s in [exhibition_section, extra_section, crm_section, tech_section]
+            if s.strip()
         )
         if context_sections:
             context_sections = "\n" + context_sections

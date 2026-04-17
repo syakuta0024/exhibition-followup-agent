@@ -321,6 +321,47 @@ def apply_column_mapping(df: pd.DataFrame, mapping: Dict[str, Optional[str]]) ->
     return result_df
 
 
+# ---------------------------------------------------------------
+# リード品質チェック
+# ---------------------------------------------------------------
+
+REQUIRED_FOR_QUALITY: Dict[str, Dict[str, str]] = {
+    "visitor_name":        {"label": "氏名",     "severity": "error"},
+    "company_name":        {"label": "会社名",   "severity": "error"},
+    "interested_products": {"label": "関心製品", "severity": "warning"},
+    "memo":                {"label": "商談メモ", "severity": "warning"},
+    "lead_rank":           {"label": "商談確度", "severity": "warning"},
+}
+
+
+def check_lead_quality(lead: dict) -> dict:
+    """
+    リードの情報充足度をチェックする。
+
+    Returns
+    -------
+    dict
+        {"errors": [...], "warnings": [...], "score": int}
+        errors   : 生成不可レベルの不足項目メッセージリスト
+        warnings : 品質低下の可能性がある不足項目メッセージリスト
+        score    : 0–100 の充足度スコア
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    for field_key, meta in REQUIRED_FOR_QUALITY.items():
+        if not str(lead.get(field_key, "")).strip():
+            msg = f"{meta['label']}が未入力です"
+            if meta["severity"] == "error":
+                errors.append(msg)
+            else:
+                warnings.append(msg)
+
+    total = len(REQUIRED_FOR_QUALITY)
+    score = round((total - len(errors) - len(warnings)) / total * 100)
+    return {"errors": errors, "warnings": warnings, "score": score}
+
+
 def save_results_to_csv(results: List[Dict], output_path: str) -> None:
     """
     メール生成結果をCSVファイルに保存する。

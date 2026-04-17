@@ -170,6 +170,29 @@ class Config:
         },
     }
 
+    # ---------------------------------------------------------------
+    # 展示会情報フィールド定義
+    # CSVアップロード時にユーザーが入力し、全リードのメール生成に共通で使用される。
+    # 空欄の場合はフォールバック値（「展示会」等）が使われる。
+    # ---------------------------------------------------------------
+    EXHIBITION_INFO_FIELDS: dict = {
+        "exhibition_name": {
+            "label": "展示会名",
+            "placeholder": "例: 第35回 日本ものづくりワールド 2026",
+            "required": False,
+        },
+        "exhibition_date": {
+            "label": "開催日",
+            "placeholder": "例: 2026年4月10日〜12日",
+            "required": False,
+        },
+        "exhibition_venue": {
+            "label": "会場",
+            "placeholder": "例: 東京ビッグサイト",
+            "required": False,
+        },
+    }
+
     @classmethod
     def validate(cls) -> bool:
         """

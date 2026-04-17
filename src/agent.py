@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from src.utils import setup_logger, parse_interested_products
+from src.utils import setup_logger, parse_interested_products, check_lead_quality
 
 logger = setup_logger(__name__)
 
@@ -44,6 +44,7 @@ class FollowUpAgent:
         self,
         lead: Dict[str, Any],
         crm_df: Optional[pd.DataFrame] = None,
+        exhibition_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -78,6 +79,7 @@ class FollowUpAgent:
         visitor = lead.get("visitor_name", "")
         company = lead.get("company_name", "")
         logger.info(f"処理開始: {visitor} さん ({company}) [ランク {lead.get('lead_rank')}]")
+        quality = check_lead_quality(lead)
 
         # ── Step 1: 関心製品で技術資料を検索 ──────────────────────
         products = parse_interested_products(str(lead.get("interested_products", "")))
@@ -129,6 +131,7 @@ class FollowUpAgent:
             tech_context=tech_context,
             crm_context=crm_context,
             crm_structured=crm_structured,
+            exhibition_info=exhibition_info,
         )
 
         # ── Step 4: 結果を返す ──────────────────────────────────
@@ -146,6 +149,7 @@ class FollowUpAgent:
             "crm_match_score": crm_match_score,
             "crm_deal_stage": crm_deal_stage,
             "crm_source": crm_source,
+            "quality_score": quality["score"],
             # メール生成タブでのCRM詳細表示用に構造化データも保持
             "crm_structured": crm_structured,
         }
@@ -235,6 +239,7 @@ class FollowUpAgent:
         self,
         leads_df: pd.DataFrame,
         crm_df: Optional[pd.DataFrame] = None,
+        exhibition_info: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         DataFrameの全リードを処理してメール生成結果のリストを返す。
@@ -259,7 +264,7 @@ class FollowUpAgent:
             lead = row.to_dict()
             logger.info(f"[{idx + 1}/{total}] ─────────────────────────")
             try:
-                result = self.process_lead(lead, crm_df=crm_df)
+                result = self.process_lead(lead, crm_df=crm_df, exhibition_info=exhibition_info)
                 results.append(result)
             except Exception as e:
                 logger.error(f"  エラー ({lead.get('visitor_name')}): {e}")
@@ -277,6 +282,7 @@ class FollowUpAgent:
                     "crm_match_score": 0,
                     "crm_deal_stage": "",
                     "crm_source": "none",
+                    "quality_score": check_lead_quality(lead).get("score", 0),
                     "crm_structured": None,
                 })
 

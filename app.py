@@ -25,6 +25,7 @@ from src.email_generator import EmailGenerator
 from src.utils import (
     auto_map_columns,
     apply_column_mapping,
+    check_lead_quality,
     filter_leads_by_rank,
     format_lead_summary,
     load_csv_with_encoding,
@@ -72,6 +73,12 @@ def _init_session_state() -> None:
         # 生成結果
         "results": [],                  # 一括生成結果リスト
         "single_result": None,          # 単一メール生成結果
+        # 展示会情報
+        "exhibition_info": {},
+        # 品質チェック状態機械
+        "gen_state": None,              # None / "error" / "confirm_warning" / "supplement"
+        "quality_result": {},
+        "pending_lead": {},
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -197,6 +204,11 @@ def _render_sidebar() -> List[str]:
                 st.session_state["data_source"] = "demo"
                 st.session_state["results"] = []
                 st.session_state["single_result"] = None
+                st.session_state["exhibition_info"] = {
+                    "exhibition_name": "第35回 日本ものづくりワールド 2026",
+                    "exhibition_date": "2026年4月10日〜12日",
+                    "exhibition_venue": "東京ビッグサイト",
+                }
                 st.rerun()
             except Exception as e:
                 st.error(f"デモデータの読み込みエラー: {e}")
@@ -571,6 +583,28 @@ def _render_column_mapping() -> None:
                 + "  \nこれらは `extra_カラム名` として保持され、メール生成のコンテキストに活用されます。"
             )
 
+        # ── 展示会情報（任意）────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📅 展示会情報（任意・全リードに共通で使用されます）")
+        st.caption("入力しない場合はメール内で「展示会」と表記されます")
+        _ex_prev = st.session_state.get("exhibition_info", {})
+        ex_cols = st.columns(3)
+        exhibition_name_val = ex_cols[0].text_input(
+            Config.EXHIBITION_INFO_FIELDS["exhibition_name"]["label"],
+            placeholder=Config.EXHIBITION_INFO_FIELDS["exhibition_name"]["placeholder"],
+            key="exhib_name_input",
+        )
+        exhibition_date_val = ex_cols[1].text_input(
+            Config.EXHIBITION_INFO_FIELDS["exhibition_date"]["label"],
+            placeholder=Config.EXHIBITION_INFO_FIELDS["exhibition_date"]["placeholder"],
+            key="exhib_date_input",
+        )
+        exhibition_venue_val = ex_cols[2].text_input(
+            Config.EXHIBITION_INFO_FIELDS["exhibition_venue"]["label"],
+            placeholder=Config.EXHIBITION_INFO_FIELDS["exhibition_venue"]["placeholder"],
+            key="exhib_venue_input",
+        )
+
         # 確定ボタン
         submitted = st.form_submit_button(
             "✅ マッピング確定 → メール生成へ進む",
@@ -601,6 +635,11 @@ def _render_column_mapping() -> None:
             st.session_state["mapping_confirmed"] = True
             st.session_state["results"] = []
             st.session_state["single_result"] = None
+            st.session_state["exhibition_info"] = {
+                "exhibition_name": exhibition_name_val,
+                "exhibition_date": exhibition_date_val,
+                "exhibition_venue": exhibition_venue_val,
+            }
             st.toast(f"✅ マッピング確定。{len(leads_df)}件のリードを読み込みました", icon="✅")
             st.rerun()
 
@@ -706,23 +745,146 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
     )
     st.info(format_lead_summary(selected_lead))
 
-    # メール生成ボタン
-    if st.button("📧 メール生成", type="primary", key="single_gen"):
-        if not st.session_state["db_built"]:
-            st.error("ナレッジベースを先に構築してください。")
-        else:
+    # ── 充足度チェック + 状態機械による生成フロー ─────────────────
+    # 選択リードが変わったら状態をリセット
+    if selected_label != st.session_state.get("_gen_state_lead_label"):
+        st.session_state["_gen_state_lead_label"] = selected_label
+        st.session_state["gen_state"] = None
+        st.session_state["quality_result"] = {}
+        st.session_state["pending_lead"] = {}
+
+    gen_state = st.session_state.get("gen_state")
+
+    if gen_state is None:
+        if st.button("📧 メール生成", type="primary", key="single_gen"):
+            if not st.session_state["db_built"]:
+                st.error("ナレッジベースを先に構築してください。")
+            else:
+                quality = check_lead_quality(selected_lead)
+                if quality["errors"]:
+                    st.session_state["gen_state"] = "error"
+                    st.session_state["quality_result"] = quality
+                    st.rerun()
+                elif quality["warnings"]:
+                    st.session_state["gen_state"] = "confirm_warning"
+                    st.session_state["quality_result"] = quality
+                    st.session_state["pending_lead"] = selected_lead.copy()
+                    st.rerun()
+                else:
+                    agent: FollowUpAgent = st.session_state["agent"]
+                    crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
+                    exhibition_info = st.session_state.get("exhibition_info", {})
+                    visitor = selected_lead.get("visitor_name", "")
+                    company = selected_lead.get("company_name", "")
+                    with st.spinner(f"{visitor}様（{company}）のメールを生成中..."):
+                        try:
+                            result = agent.process_lead(
+                                selected_lead, crm_df=crm_df, exhibition_info=exhibition_info
+                            )
+                            st.session_state["single_result"] = result
+                            st.toast("✅ メール生成が完了しました", icon="✉️")
+                        except Exception as e:
+                            st.error(f"メール生成エラー: {e}")
+
+    elif gen_state == "error":
+        quality = st.session_state.get("quality_result", {})
+        for err in quality.get("errors", []):
+            st.error(f"🔴 {err}のため生成できません")
+        if st.button("↩️ 戻る", key="cancel_error_btn"):
+            st.session_state["gen_state"] = None
+            st.rerun()
+
+    elif gen_state == "confirm_warning":
+        quality = st.session_state.get("quality_result", {})
+        st.warning("⚠️ 以下の情報が不足しています。このまま生成しますか？")
+        for w in quality.get("warnings", []):
+            st.markdown(f"- {w}")
+        _w_col1, _w_col2, _w_col3 = st.columns(3)
+        with _w_col1:
+            if st.button("🔧 補完して生成", key="supplement_btn", use_container_width=True):
+                st.session_state["gen_state"] = "supplement"
+                st.rerun()
+        with _w_col2:
+            if st.button("✅ このまま生成", key="generate_anyway_btn", use_container_width=True):
+                agent: FollowUpAgent = st.session_state["agent"]
+                crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
+                exhibition_info = st.session_state.get("exhibition_info", {})
+                pending = st.session_state.get("pending_lead", selected_lead)
+                visitor = pending.get("visitor_name", "")
+                company = pending.get("company_name", "")
+                with st.spinner(f"{visitor}様（{company}）のメールを生成中..."):
+                    try:
+                        result = agent.process_lead(
+                            pending, crm_df=crm_df, exhibition_info=exhibition_info
+                        )
+                        st.session_state["single_result"] = result
+                        st.session_state["gen_state"] = None
+                        st.toast("✅ メール生成が完了しました", icon="✉️")
+                    except Exception as e:
+                        st.error(f"メール生成エラー: {e}")
+        with _w_col3:
+            if st.button("↩️ キャンセル", key="cancel_warning_btn", use_container_width=True):
+                st.session_state["gen_state"] = None
+                st.rerun()
+
+    elif gen_state == "supplement":
+        _SUPPL_FIELDS: Dict[str, Dict] = {
+            "interested_products": {"label": "関心製品",   "type": "text"},
+            "memo":                {"label": "商談メモ",   "type": "textarea"},
+            "lead_rank":           {"label": "商談確度",   "type": "rank"},
+        }
+        pending = st.session_state.get("pending_lead", selected_lead)
+        missing_fields = {
+            k: v for k, v in _SUPPL_FIELDS.items()
+            if not str(pending.get(k, "")).strip()
+        }
+        st.info("不足情報を入力してください（CSVの元データは変更されません）")
+        with st.form("supplement_form"):
+            supplement_vals: Dict[str, str] = {}
+            for field_key, meta in missing_fields.items():
+                if meta["type"] == "textarea":
+                    supplement_vals[field_key] = st.text_area(
+                        meta["label"], value="", height=80, key=f"suppl_{field_key}"
+                    )
+                elif meta["type"] == "rank":
+                    supplement_vals[field_key] = st.selectbox(
+                        meta["label"],
+                        options=["A", "B", "C", "D", "E"],
+                        index=2,
+                        key=f"suppl_{field_key}",
+                    )
+                else:
+                    supplement_vals[field_key] = st.text_input(
+                        meta["label"], value="", key=f"suppl_{field_key}"
+                    )
+            _s_col1, _s_col2 = st.columns(2)
+            with _s_col1:
+                generate_suppl = st.form_submit_button(
+                    "✅ この内容で生成", type="primary", use_container_width=True
+                )
+            with _s_col2:
+                cancel_suppl = st.form_submit_button("↩️ キャンセル", use_container_width=True)
+
+        if generate_suppl:
+            merged = {**pending, **{k: v for k, v in supplement_vals.items() if str(v).strip()}}
             agent: FollowUpAgent = st.session_state["agent"]
-            # CRM CSV がある場合はファジーマッチング、ない場合は vectordb にフォールバック
             crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
-            visitor = selected_lead.get("visitor_name", "")
-            company = selected_lead.get("company_name", "")
+            exhibition_info = st.session_state.get("exhibition_info", {})
+            visitor = merged.get("visitor_name", "")
+            company = merged.get("company_name", "")
             with st.spinner(f"{visitor}様（{company}）のメールを生成中..."):
                 try:
-                    result = agent.process_lead(selected_lead, crm_df=crm_df)
+                    result = agent.process_lead(
+                        merged, crm_df=crm_df, exhibition_info=exhibition_info
+                    )
                     st.session_state["single_result"] = result
+                    st.session_state["gen_state"] = None
                     st.toast("✅ メール生成が完了しました", icon="✉️")
                 except Exception as e:
                     st.error(f"メール生成エラー: {e}")
+        if cancel_suppl:
+            st.session_state["gen_state"] = None
+            st.rerun()
 
     # 生成結果の表示
     if st.session_state["single_result"]:
@@ -817,7 +979,8 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
 
                 try:
                     crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
-                    result = agent.process_lead(lead, crm_df=crm_df)
+                    exhibition_info = st.session_state.get("exhibition_info", {})
+                    result = agent.process_lead(lead, crm_df=crm_df, exhibition_info=exhibition_info)
                     results.append(result)
                 except Exception as e:
                     results.append({
@@ -856,18 +1019,25 @@ def _render_tab_history() -> None:
     st.caption(f"生成済み: {len(results)}件")
 
     # サマリーテーブル
-    summary_rows = [
-        {
+    summary_rows = []
+    for r in results:
+        _score = r.get("quality_score")
+        if r.get("subject") == "ERROR":
+            _status = "❌ エラー"
+        elif _score is not None and _score < 60:
+            _status = "⚠️ 情報不足"
+        else:
+            _status = "✅ 正常"
+        summary_rows.append({
             "ID": r.get("lead_id", ""),
             "氏名": r.get("visitor_name", ""),
             "会社名": r.get("company_name", ""),
             "ランク": r.get("lead_rank", ""),
+            "充足度": f"{_score}%" if _score is not None else "—",
             "宛先メール": r.get("email_to", ""),
             "件名": r.get("subject", ""),
-            "ステータス": "✅ 正常" if r.get("subject") != "ERROR" else "❌ エラー",
-        }
-        for r in results
-    ]
+            "ステータス": _status,
+        })
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
     st.divider()
