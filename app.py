@@ -211,7 +211,11 @@ def _render_sidebar() -> List[str]:
         else:
             st.warning("⚠️ 未構築")
 
-        if st.button("🔨 ナレッジベース構築", use_container_width=True):
+        if st.button(
+            "🔨 ナレッジベース構築",
+            use_container_width=True,
+            help="Markdownの技術資料とCRM記録を再構築します。\nアップロード済みPDFは保持されます。",
+        ):
             db: VectorDBManager = st.session_state["vectordb"]
             with st.spinner("ベクトルDBを構築中..."):
                 try:

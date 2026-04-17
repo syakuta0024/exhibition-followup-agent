@@ -149,8 +149,15 @@ class VectorDBManager:
         """
         print("インデックス構築を開始します...")
 
-        # 既存インデックスをクリアして再構築
+        # アップロード済みPDFチャンクを退避（build_index後に復元）
+        pdf_saved: Dict[str, Any] = {
+            "ids": [], "embeddings": [], "documents": [], "metadatas": []
+        }
         if self.is_index_built():
+            pdf_saved = self._get_pdf_chunks()
+            pdf_count = len(pdf_saved.get("ids", []))
+            if pdf_count > 0:
+                print(f"  アップロード済みPDFチャンク: {pdf_count}件を退避")
             print("既存インデックスをクリアします...")
             self.clear_index()
             self.vectorstore = self._load_vectorstore()
@@ -191,11 +198,26 @@ class VectorDBManager:
 
             all_chunks.extend(chunks)
 
-        print(f"  合計チャンク数: {len(all_chunks)}")
+        print(f"  Markdownチャンク数: {len(all_chunks)}")
 
         # ChromaDBに格納
         self.vectorstore.add_documents(all_chunks)
-        print("インデックス構築が完了しました。")
+
+        # 退避したPDFチャンクを再投入（再Embedding不要 / コスト0）
+        if pdf_saved["ids"]:
+            self.vectorstore._collection.add(
+                ids=pdf_saved["ids"],
+                embeddings=pdf_saved["embeddings"],
+                documents=pdf_saved["documents"],
+                metadatas=pdf_saved["metadatas"],
+            )
+            # BM25コーパスにもPDFチャンクを追加
+            for text, meta in zip(pdf_saved["documents"], pdf_saved["metadatas"]):
+                self._bm25_corpus.append({"text": text, "metadata": meta})
+            print(f"  アップロード済みPDFチャンク: {len(pdf_saved['ids'])}件を復元")
+
+        total = self.vectorstore._collection.count()
+        print(f"インデックス構築が完了しました（総チャンク数: {total}）")
 
     # ==================================================================
     # Markdownファイル読み込み（メタデータ強化）
@@ -437,10 +459,11 @@ class VectorDBManager:
             RRFスコア順の検索結果（text, metadata, score）
         """
         # メタデータフィルタに合致するコーパスだけをBM25対象にする
+        # $in 演算子（{"source_type": {"$in": [...]}}) に対応
         if filter_metadata:
             filtered_corpus = [
                 doc for doc in self._bm25_corpus
-                if all(doc["metadata"].get(k) == v for k, v in filter_metadata.items())
+                if _matches_filter(doc["metadata"], filter_metadata)
             ]
         else:
             filtered_corpus = self._bm25_corpus
@@ -475,7 +498,7 @@ class VectorDBManager:
 
     def search_tech_docs(self, query: str, top_k: int = 3, hybrid: bool = True) -> List[Dict]:
         """
-        技術資料のみを対象に検索する（source_type="tech_doc" フィルタ）。
+        技術資料を対象に検索する（Markdown由来の tech_doc とPDF由来の pdf_upload を対象）。
 
         Parameters
         ----------
@@ -494,7 +517,7 @@ class VectorDBManager:
         return self.search(
             query=query,
             top_k=top_k,
-            filter_metadata={"source_type": "tech_doc"},
+            filter_metadata={"source_type": {"$in": ["tech_doc", "pdf_upload"]}},
             hybrid=hybrid,
         )
 
@@ -541,6 +564,28 @@ class VectorDBManager:
             return count > 0
         except Exception:
             return False
+
+    def _get_pdf_chunks(self) -> Dict[str, Any]:
+        """
+        ChromaDB から source_type="pdf_upload" のチャンクを取得する。
+
+        build_index() 前に退避し、再構築後に復元するために使用。
+        embeddings を含めて取得することで、再Embedding（API費用）なしに復元できる。
+
+        Returns
+        -------
+        Dict[str, Any]
+            ChromaDB collection.get() の結果（ids / embeddings / documents / metadatas）
+        """
+        try:
+            results = self.vectorstore._collection.get(
+                where={"source_type": "pdf_upload"},
+                include=["embeddings", "documents", "metadatas"],
+            )
+            return results
+        except Exception as e:
+            print(f"  警告: PDFチャンクの退避に失敗しました: {e}")
+            return {"ids": [], "embeddings": [], "documents": [], "metadatas": []}
 
     def clear_index(self) -> None:
         """インデックスをリセットする（コレクションを削除して再作成）"""
@@ -603,10 +648,10 @@ class VectorDBManager:
             print(f"  警告: '{filename}' からテキストを抽出できませんでした（スキャンPDF等）")
             return 0
 
-        # メタデータ構築（tech_doc として扱う）
+        # メタデータ構築（pdf_upload として管理することで build_index() 時に保持される）
         base_name = os.path.splitext(filename)[0]
         metadata: Dict[str, Any] = {
-            "source_type": "tech_doc",
+            "source_type": "pdf_upload",
             "source_file": filename,
             "product_name": base_name,
             "product_category": "その他",
@@ -624,7 +669,7 @@ class VectorDBManager:
             metadatas=[metadata],
         )
         for chunk in chunks:
-            context_prefix = _build_context_prefix(first_line, "tech_doc", metadata)
+            context_prefix = _build_context_prefix(first_line, "pdf_upload", metadata)
             chunk.page_content = context_prefix + chunk.page_content
 
         # ChromaDBに追加
@@ -661,6 +706,37 @@ class VectorDBManager:
 # ==================================================================
 # スタンドアロン関数群
 # ==================================================================
+
+def _matches_filter(metadata: Dict, filter_metadata: Dict) -> bool:
+    """
+    メタデータがフィルタ条件に合致するか判定する。
+
+    ChromaDB互換の演算子をサポート:
+    - 文字列値: 等価比較（例: {"source_type": "crm_record"}）
+    - {"$in": [...]}: リスト内包比較（例: {"source_type": {"$in": ["tech_doc", "pdf_upload"]}}）
+
+    Parameters
+    ----------
+    metadata : Dict
+        チェック対象のメタデータ
+    filter_metadata : Dict
+        フィルタ条件
+
+    Returns
+    -------
+    bool
+        全条件に合致すれば True
+    """
+    for key, condition in filter_metadata.items():
+        val = metadata.get(key)
+        if isinstance(condition, dict):
+            if "$in" in condition and val not in condition["$in"]:
+                return False
+        else:
+            if val != condition:
+                return False
+    return True
+
 
 def _reciprocal_rank_fusion(
     vector_results: List[Dict],
@@ -724,11 +800,12 @@ def _build_context_prefix(title: str, source_type: str, metadata: Dict) -> str:
     str
         チャンク先頭に付加するプレフィックス文字列
     """
-    if source_type == "tech_doc":
+    if source_type in ("tech_doc", "pdf_upload"):
         product = metadata.get("product_name", "不明")
         category = metadata.get("product_category", "")
         industries = metadata.get("target_industries", "")
-        prefix = f"[製品技術資料: {product}（{category}）] {title}"
+        tag = "PDF技術資料" if source_type == "pdf_upload" else "製品技術資料"
+        prefix = f"[{tag}: {product}（{category}）] {title}"
         if industries:
             prefix += f"\n対象業種: {industries}"
         return prefix + "\n\n"
