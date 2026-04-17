@@ -45,6 +45,7 @@ class FollowUpAgent:
         lead: Dict[str, Any],
         crm_df: Optional[pd.DataFrame] = None,
         exhibition_info: Optional[Dict[str, Any]] = None,
+        on_step=None,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -81,7 +82,16 @@ class FollowUpAgent:
         logger.info(f"処理開始: {visitor} さん ({company}) [ランク {lead.get('lead_rank')}]")
         quality = check_lead_quality(lead)
 
-        # ── Step 1: 関心製品で技術資料を検索 ──────────────────────
+        def _step(num: int, name: str, status: str, detail: str = "") -> None:
+            if on_step:
+                on_step(num, name, status, detail)
+
+        # ── Step 1: データ確認 ────────────────────────────────────
+        _step(1, "データ確認", "done",
+              f"{visitor} / {company} / ランク {lead.get('lead_rank', '?')}")
+
+        # ── Step 2: 関心製品で技術資料を検索 ──────────────────────
+        _step(2, "ベクトルDB検索", "running", "関心製品で技術資料を検索中...")
         products = parse_interested_products(str(lead.get("interested_products", "")))
         tech_query = " ".join(products) if products else company
         tech_results = []
@@ -91,18 +101,24 @@ class FollowUpAgent:
             tech_results = self.vectordb.search_tech_docs(tech_query, top_k=3)
             ref_tech_docs = list({r["metadata"].get("source_file", "") for r in tech_results})
             logger.info(f"  技術資料検索: {len(tech_results)}件ヒット ({', '.join(ref_tech_docs)})")
+            _step(2, "ベクトルDB検索", "done",
+                  f"{len(tech_results)}件ヒット" + (f": {', '.join(ref_tech_docs[:3])}" if ref_tech_docs else ""))
         else:
             logger.warning("  技術資料: インデックス未構築またはクエリなし")
+            _step(2, "ベクトルDB検索", "warning", "インデックス未構築またはクエリなし")
 
         tech_context = "\n\n".join(r["text"][:500] for r in tech_results)
 
-        # ── Step 2: CRM情報の取得（優先順位あり）────────────────────
+        # ── Step 3: CRM情報の取得（優先順位あり）────────────────────
         crm_context = ""
         crm_structured: Optional[Dict[str, Any]] = None
         ref_crm: List[str] = []
         crm_match_score = 0
         crm_deal_stage = ""
         crm_source = "none"
+        crm_vdb_results: List[Dict] = []
+
+        _step(3, "CRM照合", "running", "過去商談を照合中...")
 
         if crm_df is not None and not crm_df.empty:
             # ── 優先度1: CRM CSV マッチング（Email優先→会社名ファジー）──
@@ -112,20 +128,44 @@ class FollowUpAgent:
                 crm_deal_stage = crm_structured.get("lifecycle_stage", "")
                 crm_source = "csv"
                 method = crm_structured.get("match_method", "")
+                method_label = "メール一致" if method == "email" else "会社名マッチ"
                 logger.info(
                     f"  CRM CSV マッチ: スコア={crm_match_score}, "
                     f"方法={method}, ステージ={crm_deal_stage}"
                 )
+                _step(3, "CRM照合", "done",
+                      f"紐付け: {method_label} / スコア: {crm_match_score}")
             else:
                 logger.info("  CRM CSV: マッチなし（vectordbにフォールバック）")
-                # CSV にマッチしなかった場合は vectordb にフォールバック
-                crm_context, ref_crm, crm_source = self._search_crm_from_vectordb(company)
+                crm_context, ref_crm, crm_source, crm_vdb_results = self._search_crm_from_vectordb(company)
+                if crm_vdb_results:
+                    _step(3, "CRM照合", "done", f"vectordb: {len(crm_vdb_results)}件ヒット")
+                else:
+                    _step(3, "CRM照合", "warning", "マッチする過去商談なし（新規顧客）")
 
         else:
             # ── 優先度2: vectordb 検索（従来通り）──────────────────
-            crm_context, ref_crm, crm_source = self._search_crm_from_vectordb(company)
+            crm_context, ref_crm, crm_source, crm_vdb_results = self._search_crm_from_vectordb(company)
+            if crm_vdb_results:
+                _step(3, "CRM照合", "done", f"vectordb: {len(crm_vdb_results)}件ヒット")
+            else:
+                _step(3, "CRM照合", "warning", "マッチする過去商談なし（新規顧客）")
 
-        # ── Step 3: メール生成 ──────────────────────────────────
+        # ── Step 4: Web検索（未実装）────────────────────────────
+        _step(4, "Web検索", "skip", "将来実装予定（現在はスキップ）")
+
+        # ── Step 5: 情報充足確認 ─────────────────────────────────
+        if quality["errors"]:
+            _step(5, "情報充足確認", "warning",
+                  f"スコア: {quality['score']}% / エラー: {' / '.join(quality['errors'])}")
+        elif quality["warnings"]:
+            _step(5, "情報充足確認", "warning",
+                  f"スコア: {quality['score']}% / 不足: {' / '.join(quality['warnings'])}")
+        else:
+            _step(5, "情報充足確認", "done", f"充足度: {quality['score']}%")
+
+        # ── Step 6: メール生成 ──────────────────────────────────
+        _step(6, "メール生成中", "running", "LLMがメール文を生成中...")
         email = self.email_gen.generate(
             lead=lead,
             tech_context=tech_context,
@@ -133,8 +173,57 @@ class FollowUpAgent:
             crm_structured=crm_structured,
             exhibition_info=exhibition_info,
         )
+        _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
+        _step(7, "完了", "done", "メール生成が完了しました")
 
-        # ── Step 4: 結果を返す ──────────────────────────────────
+        # ── 参照チャンクの構築 ──────────────────────────────────
+        retrieved_tech_chunks: List[Dict] = []
+        if tech_results:
+            max_s = max(r.get("score", 0) for r in tech_results) or 1.0
+            for r in tech_results:
+                raw = r.get("score", 0)
+                norm = raw / max_s
+                label = "高" if norm >= 0.7 else ("中" if norm >= 0.4 else "低")
+                retrieved_tech_chunks.append({
+                    "source_file": r["metadata"].get("source_file", ""),
+                    "source_type": r["metadata"].get("source_type", "tech_doc"),
+                    "score": raw,
+                    "score_label": label,
+                    "text_preview": r["text"][:300],
+                })
+
+        retrieved_crm_chunks: List[Dict] = []
+        if crm_source == "csv" and crm_structured:
+            retrieved_crm_chunks = [{
+                "source_file": "",
+                "source_type": "crm_csv",
+                "company_name": crm_structured.get("matched_company", ""),
+                "deal_stage": crm_structured.get("lifecycle_stage", ""),
+                "lead_status": crm_structured.get("lead_status", ""),
+                "match_method": crm_structured.get("match_method", ""),
+                "match_score": crm_match_score,
+                "text_preview": "",
+            }]
+        elif crm_vdb_results:
+            max_s = max(r.get("score", 0) for r in crm_vdb_results) or 1.0
+            for r in crm_vdb_results:
+                raw = r.get("score", 0)
+                norm = raw / max_s
+                label = "高" if norm >= 0.7 else ("中" if norm >= 0.4 else "低")
+                retrieved_crm_chunks.append({
+                    "source_file": r["metadata"].get("source_file", ""),
+                    "source_type": "crm_record",
+                    "company_name": r["metadata"].get("company_name", ""),
+                    "deal_stage": r["metadata"].get("deal_stage", ""),
+                    "lead_status": "",
+                    "match_method": "vectordb",
+                    "match_score": 0,
+                    "score": raw,
+                    "score_label": label,
+                    "text_preview": r["text"][:300],
+                })
+
+        # ── Step 7: 結果を返す ──────────────────────────────────
         return {
             "lead_id": lead.get("lead_id", ""),
             "visitor_name": visitor,
@@ -150,6 +239,8 @@ class FollowUpAgent:
             "crm_deal_stage": crm_deal_stage,
             "crm_source": crm_source,
             "quality_score": quality["score"],
+            "retrieved_tech_chunks": retrieved_tech_chunks,
+            "retrieved_crm_chunks": retrieved_crm_chunks,
             # メール生成タブでのCRM詳細表示用に構造化データも保持
             "crm_structured": crm_structured,
         }
@@ -217,11 +308,11 @@ class FollowUpAgent:
 
         Returns
         -------
-        tuple[str, List[str], str]
-            (crm_context テキスト, 参照ファイルリスト, "vectordb" or "none")
+        tuple[str, List[str], str, List[Dict]]
+            (crm_context テキスト, 参照ファイルリスト, "vectordb" or "none", 生検索結果)
         """
         if not company or not self.vectordb.is_index_built():
-            return "", [], "none"
+            return "", [], "none", []
 
         crm_results = self.vectordb.search_crm(company, top_k=2)
         ref_crm = list({r["metadata"].get("source_file", "") for r in crm_results})
@@ -233,7 +324,7 @@ class FollowUpAgent:
 
         crm_context = "\n\n".join(r["text"][:500] for r in crm_results)
         source = "vectordb" if crm_results else "none"
-        return crm_context, ref_crm, source
+        return crm_context, ref_crm, source, crm_results
 
     def process_all_leads(
         self,
@@ -283,6 +374,8 @@ class FollowUpAgent:
                     "crm_deal_stage": "",
                     "crm_source": "none",
                     "quality_score": check_lead_quality(lead).get("score", 0),
+                    "retrieved_tech_chunks": [],
+                    "retrieved_crm_chunks": [],
                     "crm_structured": None,
                 })
 

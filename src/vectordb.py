@@ -677,6 +677,84 @@ class VectorDBManager:
         print(f"  PDF追加完了: '{filename}' → {len(chunks)} チャンク")
         return len(chunks)
 
+    def get_index_summary(self) -> Dict[str, Any]:
+        """
+        ベクトルDBの中身サマリーを返す。
+
+        Returns
+        -------
+        Dict containing:
+            total_chunks, by_source_type (dict), by_product (dict)
+        """
+        if not self.is_index_built():
+            return {"total_chunks": 0, "by_source_type": {}, "by_product": {}}
+
+        try:
+            results = self.vectorstore._collection.get(include=["metadatas"])
+        except Exception:
+            return {"total_chunks": 0, "by_source_type": {}, "by_product": {}}
+
+        metadatas: List[Dict] = results.get("metadatas") or []
+        total_chunks = len(metadatas)
+        by_source_type: Dict[str, Any] = {}
+        by_product: Dict[str, int] = {}
+
+        for meta in metadatas:
+            st_key = meta.get("source_type", "unknown")
+            sf = meta.get("source_file", "")
+            if st_key not in by_source_type:
+                by_source_type[st_key] = {"count": 0, "files": set()}
+            by_source_type[st_key]["count"] += 1
+            if sf:
+                by_source_type[st_key]["files"].add(sf)
+            if st_key in ("tech_doc", "pdf_upload"):
+                pn = meta.get("product_name", "")
+                if pn:
+                    by_product[pn] = by_product.get(pn, 0) + 1
+
+        for st_data in by_source_type.values():
+            st_data["files"] = sorted(st_data["files"])
+
+        by_product = dict(sorted(by_product.items(), key=lambda x: x[1], reverse=True))
+        return {
+            "total_chunks": total_chunks,
+            "by_source_type": by_source_type,
+            "by_product": by_product,
+        }
+
+    def search_for_display(
+        self,
+        query: str,
+        source_type_filter: str = "all",
+        top_k: int = 5,
+    ) -> List[Dict]:
+        """
+        UIからの検索確認用。フィルタ指定でソース種別を絞り込める。
+
+        Parameters
+        ----------
+        query : str
+            検索クエリ
+        source_type_filter : str
+            "all" / "tech" / "crm" のいずれか
+        top_k : int
+            取得件数
+
+        Returns
+        -------
+        List[Dict]
+            検索結果 (text, metadata, score)
+        """
+        if not query.strip() or not self.is_index_built():
+            return []
+        if source_type_filter == "tech":
+            filter_meta = {"source_type": {"$in": ["tech_doc", "pdf_upload"]}}
+        elif source_type_filter == "crm":
+            filter_meta = {"source_type": "crm_record"}
+        else:
+            filter_meta = None
+        return self.search(query=query, top_k=top_k, filter_metadata=filter_meta)
+
     def _try_rebuild_bm25_corpus(self) -> None:
         """
         BM25コーパスをデフォルトのデータディレクトリから再構築する。

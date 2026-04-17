@@ -704,6 +704,62 @@ def _render_tab_leads(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             )
 
 
+# ステータスアイコン定義
+_STEP_ICONS: Dict[str, str] = {
+    "running": "⏳",
+    "done": "✅",
+    "skip": "⏭️",
+    "warning": "⚠️",
+}
+_SCORE_COLORS: Dict[str, str] = {
+    "高": "#28a745",
+    "中": "#ffc107",
+    "低": "#dc3545",
+}
+
+
+def _do_single_generate(lead_data: Dict[str, Any]) -> None:
+    """
+    単一リードのメール生成を st.status + on_step コールバックで実行する。
+    結果を session_state["single_result"] に保存し、gen_state をリセットする。
+    """
+    agent: FollowUpAgent = st.session_state["agent"]
+    crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
+    exhibition_info = st.session_state.get("exhibition_info", {})
+    visitor = lead_data.get("visitor_name", "")
+    company = lead_data.get("company_name", "")
+
+    with st.status(f"{visitor}様（{company}）のメールを生成中...", expanded=True) as _status:
+        step_display = st.empty()
+        steps_state: Dict[int, Dict] = {}
+
+        def _on_step(num: int, name: str, step_status: str, detail: str = "") -> None:
+            steps_state[num] = {"name": name, "status": step_status, "detail": detail}
+            lines = []
+            for i in range(1, 8):
+                s = steps_state.get(i)
+                if s:
+                    icon = _STEP_ICONS.get(s["status"], "○")
+                    d = s.get("detail", "")
+                    line = f"{icon} **Step {i}　{s['name']}**"
+                    if d:
+                        line += f"  \n　　{d}"
+                    lines.append(line)
+            step_display.markdown("\n\n".join(lines))
+
+        try:
+            result = agent.process_lead(
+                lead_data, crm_df=crm_df, exhibition_info=exhibition_info, on_step=_on_step
+            )
+            st.session_state["single_result"] = result
+            st.session_state["gen_state"] = None
+            _status.update(label="✅ メール生成が完了しました", state="complete")
+            st.toast("✅ メール生成が完了しました", icon="✉️")
+        except Exception as e:
+            _status.update(label="❌ エラーが発生しました", state="error")
+            st.error(f"メール生成エラー: {e}")
+
+
 # ---------------------------------------------------------------
 # タブ2: メール生成
 # ---------------------------------------------------------------
@@ -771,20 +827,7 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                     st.session_state["pending_lead"] = selected_lead.copy()
                     st.rerun()
                 else:
-                    agent: FollowUpAgent = st.session_state["agent"]
-                    crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
-                    exhibition_info = st.session_state.get("exhibition_info", {})
-                    visitor = selected_lead.get("visitor_name", "")
-                    company = selected_lead.get("company_name", "")
-                    with st.spinner(f"{visitor}様（{company}）のメールを生成中..."):
-                        try:
-                            result = agent.process_lead(
-                                selected_lead, crm_df=crm_df, exhibition_info=exhibition_info
-                            )
-                            st.session_state["single_result"] = result
-                            st.toast("✅ メール生成が完了しました", icon="✉️")
-                        except Exception as e:
-                            st.error(f"メール生成エラー: {e}")
+                    _do_single_generate(selected_lead)
 
     elif gen_state == "error":
         quality = st.session_state.get("quality_result", {})
@@ -806,22 +849,7 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                 st.rerun()
         with _w_col2:
             if st.button("✅ このまま生成", key="generate_anyway_btn", use_container_width=True):
-                agent: FollowUpAgent = st.session_state["agent"]
-                crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
-                exhibition_info = st.session_state.get("exhibition_info", {})
-                pending = st.session_state.get("pending_lead", selected_lead)
-                visitor = pending.get("visitor_name", "")
-                company = pending.get("company_name", "")
-                with st.spinner(f"{visitor}様（{company}）のメールを生成中..."):
-                    try:
-                        result = agent.process_lead(
-                            pending, crm_df=crm_df, exhibition_info=exhibition_info
-                        )
-                        st.session_state["single_result"] = result
-                        st.session_state["gen_state"] = None
-                        st.toast("✅ メール生成が完了しました", icon="✉️")
-                    except Exception as e:
-                        st.error(f"メール生成エラー: {e}")
+                _do_single_generate(st.session_state.get("pending_lead", selected_lead))
         with _w_col3:
             if st.button("↩️ キャンセル", key="cancel_warning_btn", use_container_width=True):
                 st.session_state["gen_state"] = None
@@ -867,21 +895,7 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
 
         if generate_suppl:
             merged = {**pending, **{k: v for k, v in supplement_vals.items() if str(v).strip()}}
-            agent: FollowUpAgent = st.session_state["agent"]
-            crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
-            exhibition_info = st.session_state.get("exhibition_info", {})
-            visitor = merged.get("visitor_name", "")
-            company = merged.get("company_name", "")
-            with st.spinner(f"{visitor}様（{company}）のメールを生成中..."):
-                try:
-                    result = agent.process_lead(
-                        merged, crm_df=crm_df, exhibition_info=exhibition_info
-                    )
-                    st.session_state["single_result"] = result
-                    st.session_state["gen_state"] = None
-                    st.toast("✅ メール生成が完了しました", icon="✉️")
-                except Exception as e:
-                    st.error(f"メール生成エラー: {e}")
+            _do_single_generate(merged)
         if cancel_suppl:
             st.session_state["gen_state"] = None
             st.rerun()
@@ -943,16 +957,74 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             else:
                 st.caption("CRM情報: 該当なし")
 
-        with st.expander("📚 参照資料の詳細"):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**参照した技術資料**")
-                for f in result.get("ref_tech_docs", []) or ["なし"]:
-                    st.markdown(f"- `{f}`")
-            with col2:
-                st.markdown("**参照したCRM記録**")
-                for f in result.get("ref_crm", []) or ["なし"]:
-                    st.markdown(f"- `{f}`")
+        with st.expander("📚 RAG参照コンテキスト詳細"):
+            tech_chunks = result.get("retrieved_tech_chunks", [])
+            crm_chunks = result.get("retrieved_crm_chunks", [])
+
+            # ── 技術資料チャンク ──────────────────────────────
+            if tech_chunks:
+                st.markdown(f"**🔧 技術資料（{len(tech_chunks)}件ヒット）**")
+                for i, chunk in enumerate(tech_chunks, 1):
+                    src = chunk.get("source_file", "")
+                    src_type = chunk.get("source_type", "tech_doc")
+                    lbl = chunk.get("score_label", "？")
+                    raw = chunk.get("score", 0)
+                    color = _SCORE_COLORS.get(lbl, "#aaa")
+                    type_tag = "PDF" if src_type == "pdf_upload" else "Markdown"
+                    st.markdown(
+                        f'**[{i}] {src}** `{type_tag}` &nbsp;'
+                        f'スコア: <span style="color:{color}">●</span> **{lbl}**'
+                        f' <small>({raw:.4f})</small>',
+                        unsafe_allow_html=True,
+                    )
+                    if lbl == "低":
+                        st.caption("⚠️ 関連性が低い可能性があります")
+                    preview = chunk.get("text_preview", "")
+                    st.caption(preview[:180] + ("..." if len(preview) > 180 else ""))
+                    with st.expander("全文を表示"):
+                        st.text(preview)
+            else:
+                st.info("技術資料の参照なし（インデックス未構築 or ヒットなし）")
+
+            st.divider()
+
+            # ── CRM照合結果 ──────────────────────────────────
+            if crm_chunks:
+                st.markdown("**🏢 CRM照合結果**")
+                for chunk in crm_chunks:
+                    src_type = chunk.get("source_type", "")
+                    if src_type == "crm_csv":
+                        method = chunk.get("match_method", "")
+                        method_label = "メール完全一致 ✅" if method == "email" else "会社名マッチ"
+                        st.markdown(
+                            f"**{chunk.get('company_name', '？')}**"
+                            f" — 照合方法: {method_label}"
+                            f" (スコア: {chunk.get('match_score', 0)})"
+                        )
+                        if chunk.get("deal_stage"):
+                            st.caption(f"ライフサイクルステージ: {chunk['deal_stage']}")
+                        if chunk.get("lead_status"):
+                            st.caption(f"リードステータス: {chunk['lead_status']}")
+                    else:
+                        src = chunk.get("source_file", "")
+                        lbl = chunk.get("score_label", "？")
+                        color = _SCORE_COLORS.get(lbl, "#aaa")
+                        st.markdown(
+                            f'**{src}** スコア: <span style="color:{color}">●</span> **{lbl}**',
+                            unsafe_allow_html=True,
+                        )
+                        meta_parts = []
+                        if chunk.get("company_name"):
+                            meta_parts.append(f"企業: {chunk['company_name']}")
+                        if chunk.get("deal_stage"):
+                            meta_parts.append(f"ステージ: {chunk['deal_stage']}")
+                        if meta_parts:
+                            st.caption(" / ".join(meta_parts))
+                        if chunk.get("text_preview"):
+                            with st.expander("全文を表示"):
+                                st.text(chunk["text_preview"])
+            else:
+                st.info("CRM情報の参照なし")
 
     st.divider()
 
@@ -969,6 +1041,15 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             results = []
             progress_bar = st.progress(0, text="生成準備中...")
             status_text = st.empty()
+            status_step = st.empty()
+
+            crm_df_batch: Optional[pd.DataFrame] = st.session_state.get("crm_df")
+            exhibition_info_batch = st.session_state.get("exhibition_info", {})
+
+            def _on_step_batch(num: int, name: str, step_status: str, detail: str = "") -> None:
+                if step_status != "skip":
+                    icon = _STEP_ICONS.get(step_status, "○")
+                    status_step.caption(f"    {icon} Step {num}: {name} — {detail}")
 
             for i, (_, row) in enumerate(filtered_df.iterrows()):
                 lead = row.to_dict()
@@ -978,9 +1059,10 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                 progress_bar.progress(i / total, text=f"生成中... {i}/{total}件")
 
                 try:
-                    crm_df: Optional[pd.DataFrame] = st.session_state.get("crm_df")
-                    exhibition_info = st.session_state.get("exhibition_info", {})
-                    result = agent.process_lead(lead, crm_df=crm_df, exhibition_info=exhibition_info)
+                    result = agent.process_lead(
+                        lead, crm_df=crm_df_batch, exhibition_info=exhibition_info_batch,
+                        on_step=_on_step_batch
+                    )
                     results.append(result)
                 except Exception as e:
                     results.append({
@@ -994,6 +1076,9 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                         "cta": "",
                         "ref_tech_docs": [],
                         "ref_crm": [],
+                        "quality_score": check_lead_quality(lead).get("score", 0),
+                        "retrieved_tech_chunks": [],
+                        "retrieved_crm_chunks": [],
                     })
 
             progress_bar.progress(1.0, text=f"✅ 完了 {total}/{total}件")
@@ -1099,6 +1184,99 @@ def _render_tab_history() -> None:
 
 
 # ---------------------------------------------------------------
+# タブ4: ナレッジベース確認
+# ---------------------------------------------------------------
+def _render_tab_knowledge() -> None:
+    """ナレッジベース確認タブを描画する"""
+    st.subheader("🗄️ ナレッジベース確認")
+
+    db: VectorDBManager = st.session_state["vectordb"]
+
+    if not st.session_state.get("db_built") or not db.is_index_built():
+        st.info("ナレッジベースが未構築です。サイドバーの「🔨 ナレッジベース構築」を実行してください。")
+        return
+
+    summary = db.get_index_summary()
+    total = summary.get("total_chunks", 0)
+    by_type = summary.get("by_source_type", {})
+    by_product = summary.get("by_product", {})
+
+    # ── インデックスサマリー ─────────────────────────────────
+    st.markdown("### インデックスサマリー")
+    st.metric("総チャンク数", f"{total} 件")
+
+    _TYPE_LABELS = {
+        "tech_doc":   "Markdown技術資料",
+        "crm_record": "CRM記録",
+        "pdf_upload": "PDFアップロード",
+    }
+    if by_type:
+        rows = []
+        for type_key, data in by_type.items():
+            rows.append({
+                "種別":       _TYPE_LABELS.get(type_key, type_key),
+                "チャンク数": data["count"],
+                "ファイル数": len(data["files"]),
+                "ファイル一覧": ", ".join(data["files"][:5]) + ("..." if len(data["files"]) > 5 else ""),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── 製品別チャンク数 ─────────────────────────────────────
+    if by_product:
+        st.markdown("#### 製品別チャンク数（技術資料 + PDF）")
+        max_cnt = max(by_product.values()) if by_product else 1
+        for pname, cnt in by_product.items():
+            bar_len = max(1, int(cnt / max_cnt * 20))
+            st.markdown(f"**{pname}** `{'█' * bar_len}` {cnt}件")
+
+    st.divider()
+
+    # ── 検索テスト ──────────────────────────────────────────
+    st.markdown("### 🔍 検索テスト")
+    st.caption("任意のクエリを入力して、どのチャンクがヒットするか確認できます")
+
+    _col1, _col2 = st.columns([3, 1])
+    kb_query = _col1.text_input(
+        "検索クエリ",
+        placeholder="例: プレス機の異常検知",
+        key="kb_search_query",
+    )
+    kb_filter = _col2.selectbox(
+        "フィルタ",
+        options=["all", "tech", "crm"],
+        format_func=lambda x: {"all": "全て", "tech": "技術資料", "crm": "CRM記録"}[x],
+        key="kb_search_filter",
+    )
+
+    if st.button("🔍 検索", key="kb_search_btn", disabled=not kb_query):
+        with st.spinner("検索中..."):
+            hits = db.search_for_display(kb_query, source_type_filter=kb_filter, top_k=5)
+
+        if hits:
+            max_s = max(r.get("score", 0) for r in hits) or 1.0
+            for idx, r in enumerate(hits, 1):
+                raw = r.get("score", 0)
+                norm = raw / max_s
+                lbl = "高" if norm >= 0.7 else ("中" if norm >= 0.4 else "低")
+                color = _SCORE_COLORS.get(lbl, "#aaa")
+                src_type = r["metadata"].get("source_type", "")
+                src_file = r["metadata"].get("source_file", "")
+                st.markdown(
+                    f"**[{idx}] {src_file}** &nbsp; `{src_type}` &nbsp; "
+                    f'スコア: <span style="color:{color}">●</span> **{lbl}**'
+                    f" ({raw:.4f})",
+                    unsafe_allow_html=True,
+                )
+                with st.expander(f"テキスト表示 [{idx}]"):
+                    txt = r.get("text", "")
+                    st.text(txt[:500])
+                    if len(txt) > 500:
+                        st.caption(f"...（全 {len(txt)} 文字）")
+        else:
+            st.info("検索結果が見つかりませんでした。")
+
+
+# ---------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------
 def main() -> None:
@@ -1138,8 +1316,11 @@ def main() -> None:
         _render_column_mapping()
 
     else:
-        # ③ マッピング確定済み: 通常の3タブUIを表示
-        tab1, tab2, tab3 = st.tabs(["📋 リード一覧", "✉️ メール生成", "📊 生成履歴・ダウンロード"])
+        # ③ マッピング確定済み: 4タブUIを表示
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📋 リード一覧", "✉️ メール生成",
+            "📊 生成履歴・ダウンロード", "🗄️ ナレッジベース確認"
+        ])
 
         with tab1:
             _render_tab_leads(leads_df, selected_ranks)
@@ -1147,6 +1328,8 @@ def main() -> None:
             _render_tab_email(leads_df, selected_ranks)
         with tab3:
             _render_tab_history()
+        with tab4:
+            _render_tab_knowledge()
 
 
 if __name__ == "__main__":
