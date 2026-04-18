@@ -6,15 +6,17 @@ ChromaDBを使ったドキュメントのインデックス構築・検索機能
 エージェントからのRAGクエリに対応する。
 
 【主な改善点】
+- 親子チャンク（Parent-Child Chunking）: 検索は小さい子チャンク、LLMには親チャンクの広いコンテキストを渡す
+- 適応型チャンクサイズ: ドキュメント種別（tech_doc/crm_record/pdf_upload）ごとに最適サイズを使用
 - Contextual Retrieval: 各チャンク先頭にドキュメントタイトルと種別を付加
 - メタデータ強化: 製品カテゴリ・対象業種・商談ステージ等を自動付与
 - ハイブリッド検索: ベクトル検索（ChromaDB）+ BM25 → RRF統合
-- チャンキング最適化: 日本語向けに chunk_size=600, overlap=150 に変更
 """
 
 import os
 import re
 import glob
+import json
 from typing import List, Dict, Any, Optional, Tuple
 
 from langchain_openai import OpenAIEmbeddings
@@ -73,6 +75,15 @@ DEAL_STAGE_KEYWORDS: Dict[str, List[str]] = {
     "初回": ["初回", "初めて", "はじめて", "新規", "来場"],
 }
 
+# ---------------------------------------------------------------
+# 親子チャンクサイズ設定（デフォルト値・適応型は _get_splitters_for_doc_type 参照）
+# ---------------------------------------------------------------
+PARENT_CHUNK_SIZE = 1200    # 親チャンクサイズ（文字数）
+PARENT_CHUNK_OVERLAP = 100
+CHILD_CHUNK_SIZE = 300      # 子チャンクサイズ（検索対象、文字数）
+CHILD_CHUNK_OVERLAP = 50
+PARENT_STORE_PATH = "chroma_db/parent_store.json"  # 親チャンク永続化ファイル
+
 
 class VectorDBManager:
     """ChromaDBの初期化・ドキュメント登録・ハイブリッド検索を管理するクラス"""
@@ -99,11 +110,16 @@ class VectorDBManager:
             openai_api_key=Config.OPENAI_API_KEY,
         )
 
-        # テキスト分割器の初期化（日本語最適化: 600文字, 重複150文字）
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=Config.CHUNK_SIZE,
-            chunk_overlap=Config.CHUNK_OVERLAP,
-            # " "（半角スペース）を除外し日本語テキストに最適化
+        # 子チャンク用スプリッター（検索に使うチャンク、小さめ）
+        self.child_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHILD_CHUNK_SIZE,
+            chunk_overlap=CHILD_CHUNK_OVERLAP,
+            separators=["\n## ", "\n### ", "\n\n", "\n", "。", "、"],
+        )
+        # 親チャンク用スプリッター（LLMに渡す広いコンテキスト）
+        self.parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=PARENT_CHUNK_SIZE,
+            chunk_overlap=PARENT_CHUNK_OVERLAP,
             separators=["\n## ", "\n### ", "\n\n", "\n", "。", "、"],
         )
 
@@ -113,6 +129,10 @@ class VectorDBManager:
         # BM25検索用のコーパスキャッシュ（インデックス構築時に更新）
         # key=source_file, value={"text": str, "metadata": dict}
         self._bm25_corpus: List[Dict[str, Any]] = []
+
+        # 親チャンクストア: key=parent_id, value=親チャンクテキスト
+        self._parent_store: Dict[str, str] = {}
+        self._load_parent_store()
 
         # 既存インデックスが存在する場合はBM25コーパスを自動再構築する
         # （Streamlit再起動等でsession_stateがリセットされた際の対応）
@@ -162,6 +182,14 @@ class VectorDBManager:
             self.clear_index()
             self.vectorstore = self._load_vectorstore()
 
+        # PDF親チャンクエントリを再構築後に復元するため退避
+        pdf_parent_ids: set = set()
+        for meta in pdf_saved.get("metadatas", []):
+            pid = meta.get("parent_id")
+            if pid:
+                pdf_parent_ids.add(pid)
+        pdf_parent_entries = {k: v for k, v in self._parent_store.items() if k in pdf_parent_ids}
+
         # 技術資料の読み込み（強化メタデータ付き）
         tech_docs = self._load_markdown_files(tech_docs_dir, source_type="tech_doc")
         print(f"  技術資料: {len(tech_docs)} ファイル読み込み完了")
@@ -178,29 +206,42 @@ class VectorDBManager:
             for doc in all_raw_docs
         ]
 
-        # チャンク分割（Contextual Retrievalのためにタイトルをチャンク先頭に付加）
+        # 親子チャンク構造で分割（Contextual Retrieval プレフィックスは子チャンクに付加）
+        self._parent_store = {}
         all_chunks: List[Document] = []
-        for raw_doc in all_raw_docs:
-            # ドキュメント全体から先頭行（タイトル）を取得
-            first_line = raw_doc["text"].split("\n")[0].strip()
 
-            # チャンク分割
-            chunks = self.text_splitter.create_documents(
+        for raw_doc in all_raw_docs:
+            first_line = raw_doc["text"].split("\n")[0].strip()
+            source_type = raw_doc["metadata"].get("source_type", "tech_doc")
+            p_splitter, c_splitter = self._get_splitters_for_doc_type(source_type)
+
+            # ① 親チャンクを生成してストアに保存
+            parent_chunks = p_splitter.create_documents(
                 texts=[raw_doc["text"]],
                 metadatas=[raw_doc["metadata"]],
             )
+            for p_idx, parent_chunk in enumerate(parent_chunks):
+                parent_id = f"{raw_doc['metadata'].get('source_file', 'unknown')}_parent_{p_idx}"
+                self._parent_store[parent_id] = parent_chunk.page_content
 
-            # 各チャンク先頭にコンテキスト情報を付加（Contextual Retrieval）
-            for chunk in chunks:
-                source_type = chunk.metadata.get("source_type", "")
-                context_prefix = _build_context_prefix(first_line, source_type, chunk.metadata)
-                chunk.page_content = context_prefix + chunk.page_content
+                # ② 親チャンクから子チャンクを生成（DBに格納するのは子チャンクのみ）
+                child_chunks = c_splitter.create_documents(
+                    texts=[parent_chunk.page_content],
+                    metadatas=[{
+                        **parent_chunk.metadata,
+                        "parent_id": parent_id,
+                        "chunk_type": "child",
+                    }],
+                )
+                # ③ Contextual Retrieval プレフィックスを付加
+                for child in child_chunks:
+                    context_prefix = _build_context_prefix(first_line, source_type, child.metadata)
+                    child.page_content = context_prefix + child.page_content
+                all_chunks.extend(child_chunks)
 
-            all_chunks.extend(chunks)
+        print(f"  Markdownチャンク: 子={len(all_chunks)}件 / 親={len(self._parent_store)}件")
 
-        print(f"  Markdownチャンク数: {len(all_chunks)}")
-
-        # ChromaDBに格納
+        # 子チャンクのみをChromaDBに格納
         self.vectorstore.add_documents(all_chunks)
 
         # 退避したPDFチャンクを再投入（再Embedding不要 / コスト0）
@@ -215,6 +256,10 @@ class VectorDBManager:
             for text, meta in zip(pdf_saved["documents"], pdf_saved["metadatas"]):
                 self._bm25_corpus.append({"text": text, "metadata": meta})
             print(f"  アップロード済みPDFチャンク: {len(pdf_saved['ids'])}件を復元")
+
+        # PDF親チャンクエントリを復元して永続化
+        self._parent_store.update(pdf_parent_entries)
+        self._save_parent_store()
 
         total = self.vectorstore._collection.count()
         print(f"インデックス構築が完了しました（総チャンク数: {total}）")
@@ -367,10 +412,20 @@ class VectorDBManager:
             k=top_k,
             filter=filter_metadata,
         )
-        return [
-            {"text": doc.page_content, "metadata": doc.metadata, "score": score}
-            for doc, score in results
-        ]
+        output = []
+        for doc, score in results:
+            parent_id = doc.metadata.get("parent_id")
+            has_parent = bool(parent_id and parent_id in self._parent_store)
+            # LLMには親チャンク（広いコンテキスト）を渡す。親なしはフォールバック
+            context_text = self._parent_store[parent_id] if has_parent else doc.page_content
+            output.append({
+                "text": context_text,
+                "child_text": doc.page_content,
+                "metadata": doc.metadata,
+                "score": score,
+                "has_parent": has_parent,
+            })
+        return output
 
     def _bm25_search(
         self,
@@ -659,23 +714,37 @@ class VectorDBManager:
             "keywords": base_name,
         }
 
-        # BM25コーパスに追加
+        # BM25コーパスに追加（ファイル全文）
         self._bm25_corpus.append({"text": text, "metadata": metadata})
 
-        # チャンク分割 + Contextual Retrieval プレフィックス付加
+        # 親子チャンク構造で分割 + Contextual Retrieval プレフィックス付加
         first_line = text.split("\n")[0].strip()[:100]
-        chunks = self.text_splitter.create_documents(
-            texts=[text],
-            metadatas=[metadata],
-        )
-        for chunk in chunks:
-            context_prefix = _build_context_prefix(first_line, "pdf_upload", metadata)
-            chunk.page_content = context_prefix + chunk.page_content
+        p_splitter, c_splitter = self._get_splitters_for_doc_type("pdf_upload")
+        parent_chunks = p_splitter.create_documents(texts=[text], metadatas=[metadata])
 
-        # ChromaDBに追加
-        self.vectorstore.add_documents(chunks)
-        print(f"  PDF追加完了: '{filename}' → {len(chunks)} チャンク")
-        return len(chunks)
+        all_child_chunks: List[Document] = []
+        for p_idx, parent_chunk in enumerate(parent_chunks):
+            parent_id = f"{filename}_parent_{p_idx}"
+            self._parent_store[parent_id] = parent_chunk.page_content
+
+            child_chunks = c_splitter.create_documents(
+                texts=[parent_chunk.page_content],
+                metadatas=[{
+                    **parent_chunk.metadata,
+                    "parent_id": parent_id,
+                    "chunk_type": "child",
+                }],
+            )
+            for child in child_chunks:
+                context_prefix = _build_context_prefix(first_line, "pdf_upload", metadata)
+                child.page_content = context_prefix + child.page_content
+            all_child_chunks.extend(child_chunks)
+
+        # ChromaDBに追加（子チャンクのみ）
+        self.vectorstore.add_documents(all_child_chunks)
+        self._save_parent_store()
+        print(f"  PDF追加完了: '{filename}' → 子={len(all_child_chunks)}件 / 親={len(parent_chunks)}件")
+        return len(all_child_chunks)
 
     def get_index_summary(self) -> Dict[str, Any]:
         """
@@ -716,10 +785,18 @@ class VectorDBManager:
             st_data["files"] = sorted(st_data["files"])
 
         by_product = dict(sorted(by_product.items(), key=lambda x: x[1], reverse=True))
+
+        parent_store_size_kb = 0.0
+        if os.path.exists(PARENT_STORE_PATH):
+            parent_store_size_kb = round(os.path.getsize(PARENT_STORE_PATH) / 1024, 1)
+
         return {
             "total_chunks": total_chunks,
             "by_source_type": by_source_type,
             "by_product": by_product,
+            "parent_chunks": len(self._parent_store),
+            "parent_store_path": PARENT_STORE_PATH,
+            "parent_store_size_kb": parent_store_size_kb,
         }
 
     def search_for_display(
@@ -754,6 +831,52 @@ class VectorDBManager:
         else:
             filter_meta = None
         return self.search(query=query, top_k=top_k, filter_metadata=filter_meta)
+
+    def _save_parent_store(self) -> None:
+        """親チャンクをJSONファイルに永続化する"""
+        os.makedirs(os.path.dirname(PARENT_STORE_PATH), exist_ok=True)
+        with open(PARENT_STORE_PATH, "w", encoding="utf-8") as f:
+            json.dump(self._parent_store, f, ensure_ascii=False, indent=2)
+
+    def _load_parent_store(self) -> None:
+        """起動時に親チャンクをJSONファイルからロードする"""
+        if os.path.exists(PARENT_STORE_PATH):
+            try:
+                with open(PARENT_STORE_PATH, "r", encoding="utf-8") as f:
+                    self._parent_store = json.load(f)
+            except Exception:
+                self._parent_store = {}
+        else:
+            self._parent_store = {}
+
+    def _get_splitters_for_doc_type(
+        self, source_type: str
+    ) -> tuple:
+        """
+        ドキュメント種別に応じた最適な（親, 子）スプリッターを返す。
+
+        tech_doc: 専門用語・数値を意識して小さめ
+        crm_record: 商談文脈を保持するため中程度
+        pdf_upload: ページ構造を意識して大きめ
+        """
+        configs = {
+            "tech_doc":   {"parent": (1000, 80),  "child": (250, 40)},
+            "crm_record": {"parent": (1200, 100), "child": (350, 50)},
+            "pdf_upload": {"parent": (1400, 120), "child": (400, 60)},
+        }
+        cfg = configs.get(source_type, configs["tech_doc"])
+        sep = ["\n## ", "\n### ", "\n\n", "\n", "。", "、"]
+        p_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=cfg["parent"][0],
+            chunk_overlap=cfg["parent"][1],
+            separators=sep,
+        )
+        c_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=cfg["child"][0],
+            chunk_overlap=cfg["child"][1],
+            separators=sep,
+        )
+        return p_splitter, c_splitter
 
     def _try_rebuild_bm25_corpus(self) -> None:
         """

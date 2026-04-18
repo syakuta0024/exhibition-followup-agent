@@ -1200,10 +1200,32 @@ def _render_tab_knowledge() -> None:
     total = summary.get("total_chunks", 0)
     by_type = summary.get("by_source_type", {})
     by_product = summary.get("by_product", {})
+    parent_chunks = summary.get("parent_chunks", 0)
+    parent_store_size_kb = summary.get("parent_store_size_kb", 0.0)
+    parent_store_path = summary.get("parent_store_path", "")
+
+    # ── チャンキング戦略 ──────────────────────────────────────
+    st.markdown("### チャンキング戦略")
+    with st.expander("現在の設定", expanded=False):
+        st.markdown(
+            "**戦略**: 親子チャンク（Parent-Child Chunking）\n\n"
+            "| 種別 | 子チャンクサイズ | 親チャンクサイズ |\n"
+            "|------|-----------------|------------------|\n"
+            "| Markdown技術資料 | 250文字 | 1000文字 |\n"
+            "| CRM記録 | 350文字 | 1200文字 |\n"
+            "| PDFアップロード | 400文字 | 1400文字 |\n\n"
+            "検索は小さい**子チャンク**で精度高く行い、LLMには**親チャンク**の広いコンテキストを渡します。"
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("子チャンク総数（検索対象）", f"{total} 件")
+        c2.metric("親チャンク総数（LLMコンテキスト）", f"{parent_chunks} 件")
+        c3.metric("親ストアファイルサイズ", f"{parent_store_size_kb} KB")
+        if parent_store_path:
+            st.caption(f"親ストア: `{parent_store_path}`")
 
     # ── インデックスサマリー ─────────────────────────────────
     st.markdown("### インデックスサマリー")
-    st.metric("総チャンク数", f"{total} 件")
+    st.metric("総チャンク数（子）", f"{total} 件")
 
     _TYPE_LABELS = {
         "tech_doc":   "Markdown技術資料",
@@ -1267,11 +1289,21 @@ def _render_tab_knowledge() -> None:
                     f" ({raw:.4f})",
                     unsafe_allow_html=True,
                 )
-                with st.expander(f"テキスト表示 [{idx}]"):
-                    txt = r.get("text", "")
-                    st.text(txt[:500])
-                    if len(txt) > 500:
-                        st.caption(f"...（全 {len(txt)} 文字）")
+                has_parent = r.get("has_parent", False)
+                with st.expander(f"テキスト表示 [{idx}]" + (" 🔗親チャンク拡張" if has_parent else "")):
+                    child_txt = r.get("child_text", "")
+                    parent_txt = r.get("text", "")
+                    if child_txt and has_parent:
+                        st.caption("**ヒットした子チャンク（検索対象）**")
+                        st.text(child_txt[:300])
+                        st.caption("**親チャンク（LLMへ渡すコンテキスト）**")
+                        st.text(parent_txt[:600])
+                        if len(parent_txt) > 600:
+                            st.caption(f"...（全 {len(parent_txt)} 文字）")
+                    else:
+                        st.text(parent_txt[:500])
+                        if len(parent_txt) > 500:
+                            st.caption(f"...（全 {len(parent_txt)} 文字）")
         else:
             st.info("検索結果が見つかりませんでした。")
 

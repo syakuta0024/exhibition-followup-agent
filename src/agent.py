@@ -101,8 +101,11 @@ class FollowUpAgent:
             tech_results = self.vectordb.search_tech_docs(tech_query, top_k=3)
             ref_tech_docs = list({r["metadata"].get("source_file", "") for r in tech_results})
             logger.info(f"  技術資料検索: {len(tech_results)}件ヒット ({', '.join(ref_tech_docs)})")
+            has_parent_count = sum(1 for r in tech_results if r.get("has_parent"))
             _step(2, "ベクトルDB検索", "done",
-                  f"{len(tech_results)}件ヒット" + (f": {', '.join(ref_tech_docs[:3])}" if ref_tech_docs else ""))
+                  f"{len(tech_results)}件ヒット"
+                  + (f" (親チャンクで拡張: {has_parent_count}件)" if has_parent_count > 0 else "")
+                  + (f": {', '.join(ref_tech_docs[:3])}" if ref_tech_docs else ""))
         else:
             logger.warning("  技術資料: インデックス未構築またはクエリなし")
             _step(2, "ベクトルDB検索", "warning", "インデックス未構築またはクエリなし")
@@ -189,7 +192,8 @@ class FollowUpAgent:
                     "source_type": r["metadata"].get("source_type", "tech_doc"),
                     "score": raw,
                     "score_label": label,
-                    "text_preview": r["text"][:300],
+                    "has_parent": r.get("has_parent", False),
+                    "text_preview": r.get("child_text", r["text"])[:300],
                 })
 
         retrieved_crm_chunks: List[Dict] = []
