@@ -10,3 +10,4 @@ pandas
 rank_bm25
 rapidfuzz
 pypdf
+duckduckgo-search

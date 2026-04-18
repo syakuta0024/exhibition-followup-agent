@@ -79,6 +79,9 @@ def _init_session_state() -> None:
         "gen_state": None,              # None / "error" / "confirm_warning" / "supplement"
         "quality_result": {},
         "pending_lead": {},
+        # 機能トグル
+        "enable_web_search": True,
+        "enable_rank_estimation": True,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -305,6 +308,20 @@ def _render_sidebar() -> List[str]:
                 st.caption(f"対象: **{filtered_count}件** / 全{len(leads_df)}件")
 
             st.divider()
+
+        # ── セクション5: 機能トグル ─────────────────────────────
+        st.markdown("#### ⚙️ 機能設定")
+        st.session_state["enable_web_search"] = st.toggle(
+            "🌐 Web検索（DuckDuckGo）",
+            value=st.session_state.get("enable_web_search", True),
+            help="メール生成時に顧客企業の最新ニュースを検索してメールに反映します（APIキー不要）",
+        )
+        st.session_state["enable_rank_estimation"] = st.toggle(
+            "🎯 ランクAI自動推定",
+            value=st.session_state.get("enable_rank_estimation", True),
+            help="ランク未入力・★形式等の場合、メモ・役職からAIが商談確度を推定します（GPT 1回追加）",
+        )
+        st.divider()
 
         st.caption("NTX株式会社 展示会フォローアップシステム")
 
@@ -661,15 +678,30 @@ def _render_tab_leads(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
         st.info("選択した商談確度に該当するリードがありません。")
         return
 
+    # ランク正規化プレビュー（LLMなし・高速）
+    from src.rank_estimator import RankEstimator as _RE
+    _re = _RE.__new__(_RE)  # LLM初期化なしでインスタンス生成
+    _re.llm = None
+
+    def _rank_preview(raw: str) -> str:
+        n = _re.normalize_rank(str(raw))
+        if n is None:
+            return f"{raw or '(空)'} → AI推定"
+        return n if str(raw).strip().upper() == n else f"{raw} → {n}"
+
+    display_df = filtered_df.copy()
+    if "lead_rank" in display_df.columns:
+        display_df["ランク（変換後）"] = display_df["lead_rank"].apply(_rank_preview)
+
     # 表示列を決定（標準フィールド + extra_ カラム）
     standard_cols = {
         "lead_id": "ID", "visitor_name": "氏名", "company_name": "会社名",
-        "department": "部署", "job_title": "役職", "lead_rank": "確度",
+        "department": "部署", "job_title": "役職", "lead_rank": "元ランク",
+        "ランク（変換後）": "ランク（変換後）",
         "interested_products": "関心製品", "visit_date": "来場日",
     }
-    # 存在するカラムのみ表示
-    show_cols = {k: v for k, v in standard_cols.items() if k in filtered_df.columns}
-    display_df = filtered_df[list(show_cols.keys())].rename(columns=show_cols)
+    show_cols = {k: v for k, v in standard_cols.items() if k in display_df.columns}
+    display_df = display_df[list(show_cols.keys())].rename(columns=show_cols)
 
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
@@ -749,7 +781,9 @@ def _do_single_generate(lead_data: Dict[str, Any]) -> None:
 
         try:
             result = agent.process_lead(
-                lead_data, crm_df=crm_df, exhibition_info=exhibition_info, on_step=_on_step
+                lead_data, crm_df=crm_df, exhibition_info=exhibition_info, on_step=_on_step,
+                enable_web_search=st.session_state.get("enable_web_search", True),
+                enable_rank_estimation=st.session_state.get("enable_rank_estimation", True),
             )
             st.session_state["single_result"] = result
             st.session_state["gen_state"] = None
@@ -1026,6 +1060,49 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             else:
                 st.info("CRM情報の参照なし")
 
+            st.divider()
+
+            # ── Web検索結果 ──────────────────────────────────────
+            web_results = result.get("web_search_results", [])
+            if web_results:
+                st.markdown(f"**🌐 Web検索結果（{len(web_results)}件）**")
+                for i, wr in enumerate(web_results, 1):
+                    st.markdown(f"**[{i}] {wr.get('title', '')}**")
+                    snippet = wr.get("snippet", "")
+                    if snippet:
+                        st.caption(snippet)
+                    url = wr.get("url", "")
+                    if url:
+                        st.markdown(f"<small><a href='{url}' target='_blank'>{url[:80]}</a></small>",
+                                    unsafe_allow_html=True)
+            else:
+                st.info("Web検索結果なし（無効または結果なし）")
+
+            st.divider()
+
+            # ── ランク推定情報 ──────────────────────────────────
+            rank_info = result.get("rank_info", {})
+            if rank_info:
+                method = rank_info.get("method", "")
+                original = rank_info.get("original", "")
+                rank = rank_info.get("rank", "")
+                confidence = rank_info.get("confidence", "")
+                _METHOD_LABELS = {
+                    "existing": "そのまま使用",
+                    "normalized": "変換",
+                    "llm_estimated": "AI推定",
+                    "default": "デフォルト(C)",
+                }
+                method_label = _METHOD_LABELS.get(method, method)
+                conf_color = {"high": "#22c55e", "medium": "#f59e0b", "low": "#ef4444"}.get(confidence, "#aaa")
+                st.markdown(
+                    f"**🎯 ランク判定:** `{rank}` &nbsp;"
+                    f"({method_label}"
+                    + (f" / 元値: `{original}`" if original and original != rank else "")
+                    + f") &nbsp; <span style='color:{conf_color}'>●</span> 信頼度: {confidence}",
+                    unsafe_allow_html=True,
+                )
+
     st.divider()
 
     # ── 全件一括生成 ──────────────────────────────────────────
@@ -1061,7 +1138,9 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                 try:
                     result = agent.process_lead(
                         lead, crm_df=crm_df_batch, exhibition_info=exhibition_info_batch,
-                        on_step=_on_step_batch
+                        on_step=_on_step_batch,
+                        enable_web_search=st.session_state.get("enable_web_search", True),
+                        enable_rank_estimation=st.session_state.get("enable_rank_estimation", True),
                     )
                     results.append(result)
                 except Exception as e:

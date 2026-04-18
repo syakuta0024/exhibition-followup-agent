@@ -153,6 +153,7 @@ class EmailGenerator:
         crm_context: str = "",
         crm_structured: Optional[Dict[str, Any]] = None,
         exhibition_info: Optional[Dict[str, str]] = None,
+        web_context: str = "",
     ) -> Dict[str, str]:
         """
         フォローアップメールを生成する。
@@ -185,7 +186,7 @@ class EmailGenerator:
         # プロンプト組み立て
         system_prompt = self._build_system_prompt()
         human_prompt = self._build_human_prompt(
-            lead, policy, tech_context, crm_context, crm_structured, exhibition_info
+            lead, policy, tech_context, crm_context, crm_structured, exhibition_info, web_context
         )
 
         # LLM呼び出し
@@ -233,6 +234,7 @@ class EmailGenerator:
         crm_context: str,
         crm_structured: Optional[Dict[str, Any]] = None,
         exhibition_info: Optional[Dict[str, str]] = None,
+        web_context: str = "",
     ) -> str:
         """
         ユーザープロンプトを組み立てる。
@@ -298,9 +300,18 @@ class EmailGenerator:
             _ex_lines.append(f"- 会場: {_ex_venue}")
         exhibition_section = "\n".join(_ex_lines) + "\n"
 
+        # ── Web検索結果セクション ────────────────────────────────
+        web_section = ""
+        if web_context.strip():
+            web_section = (
+                f"## 顧客企業の最新情報（Web検索結果）\n{web_context}\n\n"
+                "※ 上記の最新情報が関連する場合、メール内で自然に触れてください。"
+                "不自然になる場合は無視して構いません。\n"
+            )
+
         # ── セクション結合 ────────────────────────────────────────
         context_sections = "\n".join(
-            s for s in [exhibition_section, extra_section, crm_section, tech_section]
+            s for s in [exhibition_section, extra_section, crm_section, tech_section, web_section]
             if s.strip()
         )
         if context_sections:

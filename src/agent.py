@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from src.utils import setup_logger, parse_interested_products, check_lead_quality
+from src.web_searcher import WebSearcher
+from src.rank_estimator import RankEstimator
 
 logger = setup_logger(__name__)
 
@@ -38,6 +40,8 @@ class FollowUpAgent:
         """
         self.vectordb = vectordb_manager
         self.email_gen = email_generator
+        self.web_searcher = WebSearcher()
+        self.rank_estimator = RankEstimator()
         logger.info("FollowUpAgent 初期化完了")
 
     def process_lead(
@@ -46,6 +50,8 @@ class FollowUpAgent:
         crm_df: Optional[pd.DataFrame] = None,
         exhibition_info: Optional[Dict[str, Any]] = None,
         on_step=None,
+        enable_web_search: bool = True,
+        enable_rank_estimation: bool = True,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -80,15 +86,30 @@ class FollowUpAgent:
         visitor = lead.get("visitor_name", "")
         company = lead.get("company_name", "")
         logger.info(f"処理開始: {visitor} さん ({company}) [ランク {lead.get('lead_rank')}]")
-        quality = check_lead_quality(lead)
 
         def _step(num: int, name: str, status: str, detail: str = "") -> None:
             if on_step:
                 on_step(num, name, status, detail)
 
-        # ── Step 1: データ確認 ────────────────────────────────────
+        # ── Step 1: データ確認 + ランク正規化・推定 ───────────────
+        rank_result = self.rank_estimator.estimate_from_lead(
+            lead, enable_llm=enable_rank_estimation
+        )
+        lead = lead.copy()
+        lead["lead_rank"] = rank_result["rank"]
+        lead["_rank_method"] = rank_result["method"]
+        lead["_rank_confidence"] = rank_result["confidence"]
+        lead["_rank_original"] = rank_result["original"]
+
+        rank_detail = (
+            f"ランク: {rank_result['rank']}"
+            + (f" ← {rank_result['original']}" if rank_result["original"] != rank_result["rank"] else "")
+            + f" ({rank_result['method']})"
+        )
         _step(1, "データ確認", "done",
-              f"{visitor} / {company} / ランク {lead.get('lead_rank', '?')}")
+              f"{visitor} / {company} / {rank_detail}")
+
+        quality = check_lead_quality(lead)
 
         # ── Step 2: 関心製品で技術資料を検索 ──────────────────────
         _step(2, "ベクトルDB検索", "running", "関心製品で技術資料を検索中...")
@@ -154,8 +175,24 @@ class FollowUpAgent:
             else:
                 _step(3, "CRM照合", "warning", "マッチする過去商談なし（新規顧客）")
 
-        # ── Step 4: Web検索（未実装）────────────────────────────
-        _step(4, "Web検索", "skip", "将来実装予定（現在はスキップ）")
+        # ── Step 4: Web検索 ──────────────────────────────────────
+        web_info: Dict[str, Any] = {"success": False, "summary": "", "results": []}
+        if enable_web_search and company:
+            _step(4, "Web検索", "running", f"{company}の最新情報を検索中...")
+            try:
+                web_info = self.web_searcher.search_company(company)
+                if web_info["success"]:
+                    first_title = web_info["results"][0]["title"][:40] if web_info["results"] else ""
+                    _step(4, "Web検索", "done",
+                          f"{len(web_info['results'])}件ヒット: {first_title}...")
+                else:
+                    _step(4, "Web検索", "warning",
+                          f"結果なし（{web_info['error']}）")
+            except Exception as e:
+                _step(4, "Web検索", "warning", f"検索失敗: {e}")
+                web_info = {"success": False, "summary": "", "results": []}
+        else:
+            _step(4, "Web検索", "skip", "スキップ（無効）")
 
         # ── Step 5: 情報充足確認 ─────────────────────────────────
         if quality["errors"]:
@@ -175,6 +212,7 @@ class FollowUpAgent:
             crm_context=crm_context,
             crm_structured=crm_structured,
             exhibition_info=exhibition_info,
+            web_context=web_info.get("summary", ""),
         )
         _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
         _step(7, "完了", "done", "メール生成が完了しました")
@@ -245,8 +283,9 @@ class FollowUpAgent:
             "quality_score": quality["score"],
             "retrieved_tech_chunks": retrieved_tech_chunks,
             "retrieved_crm_chunks": retrieved_crm_chunks,
-            # メール生成タブでのCRM詳細表示用に構造化データも保持
             "crm_structured": crm_structured,
+            "web_search_results": web_info.get("results", []),
+            "rank_info": rank_result,
         }
 
     def _match_crm_from_csv(
@@ -335,6 +374,8 @@ class FollowUpAgent:
         leads_df: pd.DataFrame,
         crm_df: Optional[pd.DataFrame] = None,
         exhibition_info: Optional[Dict[str, Any]] = None,
+        enable_web_search: bool = True,
+        enable_rank_estimation: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         DataFrameの全リードを処理してメール生成結果のリストを返す。
@@ -359,7 +400,11 @@ class FollowUpAgent:
             lead = row.to_dict()
             logger.info(f"[{idx + 1}/{total}] ─────────────────────────")
             try:
-                result = self.process_lead(lead, crm_df=crm_df, exhibition_info=exhibition_info)
+                result = self.process_lead(
+                    lead, crm_df=crm_df, exhibition_info=exhibition_info,
+                    enable_web_search=enable_web_search,
+                    enable_rank_estimation=enable_rank_estimation,
+                )
                 results.append(result)
             except Exception as e:
                 logger.error(f"  エラー ({lead.get('visitor_name')}): {e}")
