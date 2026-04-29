@@ -30,3 +30,7 @@ output/
 
 # ログファイル
 *.log
+
+# Gmail OAuth 認証情報（絶対にコミットしない）
+credentials/credentials.json
+credentials/token.json

@@ -100,7 +100,7 @@ def filter_leads_by_rank(df: pd.DataFrame, ranks: List[str]) -> pd.DataFrame:
 
     # 大文字に統一して比較
     upper_ranks = [r.upper() for r in ranks]
-    return df[df["lead_rank"].str.upper().isin(upper_ranks)].reset_index(drop=True)
+    return df[df["lead_rank"].str.upper().isin(upper_ranks)]
 
 
 def parse_interested_products(products_str: str) -> List[str]:

@@ -33,6 +33,13 @@ from src.utils import (
 )
 from src.vectordb import VectorDBManager
 
+# pypdf の利用可否を起動時に1回だけ確認
+try:
+    import pypdf  # noqa: F401
+    PYPDF_AVAILABLE = True
+except ImportError:
+    PYPDF_AVAILABLE = False
+
 # ---------------------------------------------------------------
 # 商談確度バッジの色定義（HTML インラインスタイル）
 # ---------------------------------------------------------------
@@ -82,6 +89,22 @@ def _init_session_state() -> None:
         # 機能トグル
         "enable_web_search": True,
         "enable_rank_estimation": True,
+        # 送信元情報
+        "sender_company": "",
+        # ステップ進捗ガイド
+        "show_next_step_kb": False,     # マッピング確定後にKB構築バナーを表示するフラグ
+        # 音声管理
+        "audio_files_meta": [],         # [{filename, duration_sec, start_time, file_bytes, rep_name}]
+        "audio_associations": {},       # {lead_idx: filename} 確定した紐づけ
+        "audio_transcripts": {},        # {lead_idx: transcript_str}
+        "audio_needs": {},              # {lead_idx: needs_dict}
+        "audio_match_results": [],      # List[MatchResult] 最新の紐づけ結果（ギャップ検出用）
+        "audio_mapping_csvs": [],       # アップロードされた紐づけCSVのDataFrameリスト
+        "audio_mapping_mode": "auto",   # "csv" | "auto"
+        # 一括生成コスト確認ダイアログ
+        "batch_confirm_pending": False,
+        # プライバシー通知
+        "privacy_notice_acknowledged": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -109,11 +132,12 @@ def _initialize_components() -> bool:
     if st.session_state["email_gen"] is None:
         st.session_state["email_gen"] = EmailGenerator()
 
-    if st.session_state["agent"] is None:
-        st.session_state["agent"] = FollowUpAgent(
-            vectordb_manager=st.session_state["vectordb"],
-            email_generator=st.session_state["email_gen"],
-        )
+    # FollowUpAgent は毎回再生成してモジュール変更を即反映する
+    # (VectorDBManager と EmailGenerator はセッション内でキャッシュ済み)
+    st.session_state["agent"] = FollowUpAgent(
+        vectordb_manager=st.session_state["vectordb"],
+        email_generator=st.session_state["email_gen"],
+    )
 
     if st.session_state["vectordb"] is not None:
         st.session_state["db_built"] = st.session_state["vectordb"].is_index_built()
@@ -141,8 +165,35 @@ def _render_sidebar() -> List[str]:
     selected_ranks: List[str] = ["A", "B", "C", "D", "E"]
 
     with st.sidebar:
-        st.markdown("## 🏭 NTX株式会社")
-        st.markdown("**展示会フォローアップシステム**")
+        st.markdown("## 🏭 展示会フォローアップ")
+        st.markdown("**メール自動生成システム**")
+        st.divider()
+
+        # ── 送信元会社名 ─────────────────────────────────────────
+        st.session_state["sender_company"] = st.text_input(
+            "🏢 送信元会社名",
+            value=st.session_state.get("sender_company", ""),
+            placeholder="例: 株式会社○○",
+            help="生成するメールの署名・挨拶文に使用されます。未入力の場合は「弊社」になります。",
+        )
+        st.divider()
+
+        # ── ステップ進捗インジケーター ────────────────────────────
+        _mapping_done = st.session_state.get("mapping_confirmed", False)
+        _kb_done = st.session_state.get("db_built", False)
+
+        def _step_label(done: bool, active: bool, num: str, label: str) -> str:
+            if done:
+                return f"✅ {num} {label}"
+            if active:
+                return f"**🔷 {num} {label}**"
+            return f"⬜ {num} {label}"
+
+        st.markdown(
+            _step_label(_mapping_done, not _mapping_done, "①", "データ読込") + "  \n" +
+            _step_label(_kb_done, _mapping_done and not _kb_done, "②", "KB構築") + "  \n" +
+            _step_label(False, _kb_done, "③", "メール生成")
+        )
         st.divider()
 
         # ── セクション1: データ読み込み ───────────────────────────
@@ -154,6 +205,7 @@ def _render_sidebar() -> List[str]:
             type=["csv"],
             help="Lead Manager, Q-PASS, Sansan等のエクスポートCSVに対応。\nUTF-8 / Shift_JIS / BOM付き UTF-8 をサポートします。",
         )
+        st.caption("🔒 アップロードされたデータはメール生成のためOpenAI APIに送信されます")
 
         # ファイルがアップロードされた場合の処理
         if uploaded_file is not None:
@@ -180,6 +232,10 @@ def _render_sidebar() -> List[str]:
         # マッピング状態の表示
         if st.session_state["mapping_confirmed"]:
             st.success(f"✅ データ読み込み済み（{len(st.session_state['leads_df'])}件）")
+            if st.session_state.get("raw_uploaded_df") is not None:
+                if st.button("↩️ マッピングをやり直す", use_container_width=True, key="redo_mapping_sidebar"):
+                    st.session_state["mapping_confirmed"] = False
+                    st.rerun()
         elif st.session_state["raw_uploaded_df"] is not None:
             st.info("⚙️ カラムマッピングを確認してください（下部）")
 
@@ -226,9 +282,14 @@ def _render_sidebar() -> List[str]:
         else:
             st.warning("⚠️ 未構築")
 
+        _kb_is_next = (
+            st.session_state.get("mapping_confirmed", False)
+            and not st.session_state.get("db_built", False)
+        )
         if st.button(
-            "🔨 ナレッジベース構築",
+            "🔨 ① ナレッジベース構築",
             use_container_width=True,
+            type="primary" if _kb_is_next else "secondary",
             help="Markdownの技術資料とCRM記録を再構築します。\nアップロード済みPDFは保持されます。",
         ):
             db: VectorDBManager = st.session_state["vectordb"]
@@ -236,6 +297,7 @@ def _render_sidebar() -> List[str]:
                 try:
                     db.build_index(Config.TECH_DOCS_DIR, Config.CRM_RECORDS_DIR)
                     st.session_state["db_built"] = True
+                    st.session_state["show_next_step_kb"] = False
                     st.toast("✅ ナレッジベースを構築しました", icon="✅")
                     st.rerun()
                 except Exception as e:
@@ -243,48 +305,42 @@ def _render_sidebar() -> List[str]:
 
         # ── PDF アップロード ──────────────────────────────────────
         st.markdown("#### 📄 製品資料PDFアップロード")
-        st.caption("PDFをアップロードしてナレッジベースに追加できます")
-        pdf_files = st.file_uploader(
-            "PDFをアップロード",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key="pdf_uploader",
-            help="複数ファイルを同時にアップロード可能。追加後はメール生成時の参照資料として活用されます。",
-        )
-        if pdf_files and st.button("🔨 PDFをベクトルDBに追加", use_container_width=True, key="pdf_add_btn"):
-            db: VectorDBManager = st.session_state["vectordb"]
-            total_chunks = 0
-            added_count = 0
-            has_import_error = False
-            with st.spinner(f"{len(pdf_files)}件のPDFを取り込み中..."):
-                for pdf_file in pdf_files:
-                    try:
-                        chunks = db.add_pdf(pdf_file, source_name=pdf_file.name)
-                        total_chunks += chunks
-                        if chunks > 0:
-                            added_count += 1
-                        else:
-                            st.warning(
-                                f"⚠️ '{pdf_file.name}' からテキストを抽出できませんでした。"
-                                "スキャンPDF（画像のみ）は現在非対応です。"
-                            )
-                    except ImportError:
-                        has_import_error = True
-                        st.error(
-                            "**pypdf がインストールされていません。**\n\n"
-                            "新しいターミナルウィンドウで以下を実行してください:\n\n"
-                            "```\npip install pypdf\n```\n\n"
-                            "インストール後、Streamlitを再起動してください。"
-                        )
-                        break  # 全ファイルで同じエラーになるので中断
-                    except Exception as e:
-                        st.warning(f"⚠️ '{pdf_file.name}' の取り込みに失敗: {e}")
-            if added_count > 0:
-                st.session_state["db_built"] = True
-                st.success(f"✅ {added_count}件のPDFを取り込みました（合計{total_chunks}チャンク）")
-            elif not has_import_error and added_count == 0 and len(pdf_files) > 0:
-                # ImportError以外の理由で0件の場合のみ表示
-                pass  # 個別ファイルのメッセージで十分
+        if not PYPDF_AVAILABLE:
+            st.info(
+                "📄 PDF取り込み機能は現在ご利用いただけません。\n\n"
+                "ご利用を希望される場合は **IT担当者にご連絡ください**。\n\n"
+                "（必要設定: `pypdf` パッケージのインストール）"
+            )
+        else:
+            st.caption("PDFをアップロードしてナレッジベースに追加できます")
+            pdf_files = st.file_uploader(
+                "PDFをアップロード",
+                type=["pdf"],
+                accept_multiple_files=True,
+                key="pdf_uploader",
+                help="複数ファイルを同時にアップロード可能。追加後はメール生成時の参照資料として活用されます。",
+            )
+            if pdf_files and st.button("🔨 PDFをベクトルDBに追加", use_container_width=True, key="pdf_add_btn"):
+                db: VectorDBManager = st.session_state["vectordb"]
+                total_chunks = 0
+                added_count = 0
+                with st.spinner(f"{len(pdf_files)}件のPDFを取り込み中..."):
+                    for pdf_file in pdf_files:
+                        try:
+                            chunks = db.add_pdf(pdf_file, source_name=pdf_file.name)
+                            total_chunks += chunks
+                            if chunks > 0:
+                                added_count += 1
+                            else:
+                                st.warning(
+                                    f"⚠️ '{pdf_file.name}' からテキストを抽出できませんでした。"
+                                    "スキャンPDF（画像のみ）は現在非対応です。"
+                                )
+                        except Exception as e:
+                            st.warning(f"⚠️ '{pdf_file.name}' の取り込みに失敗: {e}")
+                if added_count > 0:
+                    st.session_state["db_built"] = True
+                    st.success(f"✅ {added_count}件のPDFを取り込みました（合計{total_chunks}チャンク）")
 
         st.divider()
 
@@ -323,7 +379,7 @@ def _render_sidebar() -> List[str]:
         )
         st.divider()
 
-        st.caption("NTX株式会社 展示会フォローアップシステム")
+        st.caption("展示会フォローアップシステム")
 
     return selected_ranks
 
@@ -349,6 +405,7 @@ def _render_crm_sidebar_section() -> None:
         key="crm_csv_uploader",
         help="Salesforce, kintone, HubSpot等のエクスポートCSVに対応。\n会社名カラムで展示会リードと自動紐付けします。",
     )
+    st.caption("🔒 CRM情報もメール生成のためOpenAI APIに送信されます")
 
     # 新しいCRM CSVが選択された場合: マッピングをリセットして読み込む
     if crm_uploaded_file is not None:
@@ -504,11 +561,10 @@ def _render_welcome() -> None:
     st.markdown("---")
     st.markdown(
         "#### 💡 使い方の流れ\n"
-        "1. **CSVアップロード** または **デモデータ** を選択\n"
-        "2. **カラムマッピング** を確認・調整して確定\n"
-        "3. サイドバーで **ナレッジベース構築**\n"
-        "4. **メール生成** タブでフォローアップメールを生成\n"
-        "5. 生成結果を **CSV ダウンロード**"
+        "**① データ読込** — CSVアップロード または デモデータ を選択 → カラムマッピング確定\n\n"
+        "**② ナレッジベース構築** — サイドバーの「🔨 ① ナレッジベース構築」で製品資料を登録\n\n"
+        "**③ メール生成** — メール生成タブでフォローアップメールを生成\n\n"
+        "**④ ダウンロード** — 生成結果を CSV でダウンロード"
     )
 
 
@@ -637,11 +693,12 @@ def _render_column_mapping() -> None:
                 if v is None
             ]
             if missing_required:
-                st.warning(
-                    f"⚠️ 以下の必須フィールドがマッピングされていません: "
+                st.error(
+                    f"🔴 以下の必須フィールドがマッピングされていません: "
                     f"{', '.join(missing_required)}\n\n"
-                    "このまま続行するとメール生成の品質が低下する場合があります。"
+                    "マッピングを設定してから確定してください。"
                 )
+                return
 
             # マッピングを適用してDataFrameを標準化
             final_mapping = {**required_selections, **optional_selections}
@@ -650,6 +707,7 @@ def _render_column_mapping() -> None:
             # session_state に保存
             st.session_state["leads_df"] = leads_df
             st.session_state["mapping_confirmed"] = True
+            st.session_state["show_next_step_kb"] = True
             st.session_state["results"] = []
             st.session_state["single_result"] = None
             st.session_state["exhibition_info"] = {
@@ -780,10 +838,14 @@ def _do_single_generate(lead_data: Dict[str, Any]) -> None:
             step_display.markdown("\n\n".join(lines))
 
         try:
+            _lead_idx = lead_data.get("_df_index")
             result = agent.process_lead(
                 lead_data, crm_df=crm_df, exhibition_info=exhibition_info, on_step=_on_step,
                 enable_web_search=st.session_state.get("enable_web_search", True),
                 enable_rank_estimation=st.session_state.get("enable_rank_estimation", True),
+                sender_company=st.session_state.get("sender_company", ""),
+                transcript=st.session_state["audio_transcripts"].get(_lead_idx, ""),
+                extracted_needs=st.session_state["audio_needs"].get(_lead_idx),
             )
             st.session_state["single_result"] = result
             st.session_state["gen_state"] = None
@@ -802,7 +864,16 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
     st.subheader("✉️ フォローアップメール生成")
 
     if not st.session_state["db_built"]:
-        st.warning("⚠️ ナレッジベースが未構築です。サイドバーの「🔨 ナレッジベース構築」ボタンを押してください。")
+        st.error("🔒 このタブを使うには、まず **② KB管理** でナレッジベースの構築が必要です")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.success("✅ ① データ読込")
+        with col2:
+            st.warning("▶️ ② KB構築 ← 次のステップ")
+        with col3:
+            st.info("🔒 ③ メール生成")
+        st.info("💡 サイドバーの **「🔨 ナレッジベース構築」** ボタンを押してください。")
+        return
 
     filtered_df = filter_leads_by_rank(leads_df, selected_ranks) if selected_ranks else leads_df
 
@@ -825,6 +896,7 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
     )
     selected_idx = lead_options[selected_label]
     selected_lead = filtered_df.loc[selected_idx].to_dict()
+    selected_lead["_df_index"] = selected_idx  # 音声コンテキスト伝播用
 
     # 選択リード情報サマリー
     rank = selected_lead.get("lead_rank", "")
@@ -1065,16 +1137,29 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
             # ── Web検索結果 ──────────────────────────────────────
             web_results = result.get("web_search_results", [])
             if web_results:
-                st.markdown(f"**🌐 Web検索結果（{len(web_results)}件）**")
-                for i, wr in enumerate(web_results, 1):
-                    st.markdown(f"**[{i}] {wr.get('title', '')}**")
-                    snippet = wr.get("snippet", "")
-                    if snippet:
-                        st.caption(snippet)
-                    url = wr.get("url", "")
-                    if url:
-                        st.markdown(f"<small><a href='{url}' target='_blank'>{url[:80]}</a></small>",
-                                    unsafe_allow_html=True)
+                profile_results = [r for r in web_results if r.get("section") == "profile"]
+                news_results = [r for r in web_results if r.get("section") == "news"]
+                other_results = [r for r in web_results if r.get("section") not in ("profile", "news")]
+
+                def _render_web_items(items, label):
+                    if not items:
+                        return
+                    st.markdown(f"**{label}（{len(items)}件）**")
+                    for wr in items:
+                        st.markdown(f"**{wr.get('title', '')}**")
+                        snippet = wr.get("snippet", "")
+                        if snippet:
+                            st.caption(snippet)
+                        url = wr.get("url", "")
+                        if url:
+                            st.markdown(
+                                f"<small><a href='{url}' target='_blank'>{url[:80]}</a></small>",
+                                unsafe_allow_html=True,
+                            )
+
+                _render_web_items(profile_results, "🏢 事業内容・製品・サービス")
+                _render_web_items(news_results, "📰 最新動向")
+                _render_web_items(other_results, "🌐 Web検索結果")
             else:
                 st.info("Web検索結果なし（無効または結果なし）")
 
@@ -1109,14 +1194,118 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
     st.markdown("### 全件一括生成")
     st.caption(f"対象: {len(filtered_df)}件のリードに対してメールを一括生成します")
 
-    if st.button("🔄 全件一括生成", key="batch_gen"):
-        if not st.session_state["db_built"]:
-            st.error("ナレッジベースを先に構築してください。")
+    # ── コスト見積もりヘルパー ──────────────────────────────────────
+    def _calc_cost_estimate(n: int, enable_web: bool, enable_rank: bool) -> dict:
+        from src.config import Config
+        input_tokens = Config.EST_INPUT_TOKENS_PER_LEAD
+        if enable_rank:
+            input_tokens += Config.EST_RANK_EXTRA_INPUT_TOKENS
+        total_input = n * input_tokens
+        total_output = n * Config.EST_OUTPUT_TOKENS_PER_LEAD
+        cost_input = total_input / 1_000_000 * Config.LLM_PRICE_INPUT_PER_1M
+        cost_output = total_output / 1_000_000 * Config.LLM_PRICE_OUTPUT_PER_1M
+        total_cost = cost_input + cost_output
+        secs = n * Config.EST_SECONDS_PER_LEAD_BASE
+        if enable_web:
+            secs += n * Config.EST_SECONDS_PER_LEAD_WEB
+        return {
+            "total_input_tokens": total_input,
+            "total_output_tokens": total_output,
+            "cost_input": cost_input,
+            "cost_output": cost_output,
+            "total_cost": total_cost,
+            "est_minutes": secs / 60,
+        }
+
+    total_leads = len(filtered_df)
+
+    if not st.session_state.get("batch_confirm_pending", False):
+        # ── Step 1: 生成ボタン ─────────────────────────────────────
+        if st.button("🔄 全件一括生成", key="batch_gen"):
+            if not st.session_state["db_built"]:
+                st.error("ナレッジベースを先に構築してください。")
+            else:
+                st.session_state["batch_confirm_pending"] = True
+                st.rerun()
+    else:
+        # ── Step 2: コスト確認ダイアログ ──────────────────────────
+        enable_web = st.session_state.get("enable_web_search", True)
+        enable_rank = st.session_state.get("enable_rank_estimation", True)
+
+        already_done = len(st.session_state.get("results", []))
+        remaining = total_leads - already_done
+        can_resume = 0 < already_done < total_leads
+
+        target_n = remaining if can_resume else total_leads
+        est = _calc_cost_estimate(target_n, enable_web=enable_web, enable_rank=enable_rank)
+
+        st.warning("### ⚠️ 実行前に確認してください", icon="⚠️")
+
+        if can_resume:
+            st.info(f"✅ **{already_done}件** は生成済みです。続きから **{remaining}件** のみ実行できます。")
+
+        st.markdown(
+            f"""
+| 項目 | 見積もり |
+|------|---------|
+| 対象件数 | **{target_n:,} 件**{"（残り）" if can_resume else ""} |
+| 推定入力トークン | {est['total_input_tokens']:,} トークン |
+| 推定出力トークン | {est['total_output_tokens']:,} トークン |
+| 推定コスト（入力） | **${est['cost_input']:.4f}** |
+| 推定コスト（出力） | **${est['cost_output']:.4f}** |
+| **合計推定コスト** | **${est['total_cost']:.4f}** |
+| 推定所要時間 | 約 **{est['est_minutes']:.0f} 分** |
+"""
+        )
+        st.caption(
+            "※ gpt-5.4-nano 料金（入力 $0.20/1M・出力 $1.25/1M）をもとに算出した目安です。"
+            "実際の料金はキャッシュ利用状況等により変動します。"
+        )
+        st.info("途中で止まった場合でも、「生成履歴・ダウンロード」タブから生成済み件数分のCSVをダウンロードできます。")
+
+        execute = False
+        restart = False
+        if can_resume:
+            col_resume, col_fresh, col_cancel = st.columns([3, 3, 1])
+            with col_resume:
+                execute = st.button(
+                    f"▶️ 続きから実行（残り{remaining}件）",
+                    key="batch_run_resume",
+                    type="primary",
+                    use_container_width=True,
+                )
+            with col_fresh:
+                restart = st.button(
+                    "🔄 最初から実行（生成済みを上書き）",
+                    key="batch_run_fresh",
+                    use_container_width=True,
+                )
+            with col_cancel:
+                if st.button("❌", key="batch_cancel", use_container_width=True):
+                    st.session_state["batch_confirm_pending"] = False
+                    st.rerun()
         else:
+            col_ok, col_cancel = st.columns([1, 1])
+            with col_ok:
+                execute = st.button("✅ 実行する", key="batch_run_confirmed", type="primary")
+            with col_cancel:
+                if st.button("❌ キャンセル", key="batch_cancel"):
+                    st.session_state["batch_confirm_pending"] = False
+                    st.rerun()
+
+        if execute or restart:
+            st.session_state["batch_confirm_pending"] = False
+            if restart:
+                st.session_state["results"] = []
+
             agent: FollowUpAgent = st.session_state["agent"]
-            total = len(filtered_df)
-            results = []
-            progress_bar = st.progress(0, text="生成準備中...")
+            total = total_leads
+            results = list(st.session_state.get("results", []))
+            start_idx = len(results)
+
+            progress_bar = st.progress(
+                start_idx / total if total > 0 else 0, text="生成準備中..."
+            )
             status_text = st.empty()
             status_step = st.empty()
 
@@ -1129,6 +1318,9 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                     status_step.caption(f"    {icon} Step {num}: {name} — {detail}")
 
             for i, (_, row) in enumerate(filtered_df.iterrows()):
+                if i < start_idx:
+                    continue  # 生成済みをスキップ
+
                 lead = row.to_dict()
                 visitor = lead.get("visitor_name", "")
                 company = lead.get("company_name", "")
@@ -1141,6 +1333,9 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                         on_step=_on_step_batch,
                         enable_web_search=st.session_state.get("enable_web_search", True),
                         enable_rank_estimation=st.session_state.get("enable_rank_estimation", True),
+                        sender_company=st.session_state.get("sender_company", ""),
+                        transcript=st.session_state["audio_transcripts"].get(row.name, ""),
+                        extracted_needs=st.session_state["audio_needs"].get(row.name),
                     )
                     results.append(result)
                 except Exception as e:
@@ -1159,10 +1354,14 @@ def _render_tab_email(leads_df: pd.DataFrame, selected_ranks: List[str]) -> None
                         "retrieved_tech_chunks": [],
                         "retrieved_crm_chunks": [],
                     })
+                st.session_state["results"] = results  # 逐次保存
 
             progress_bar.progress(1.0, text=f"✅ 完了 {total}/{total}件")
             status_text.empty()
-            st.session_state["results"] = results
+
+            error_count = sum(1 for r in results if r.get("subject") == "ERROR")
+            if error_count > 0:
+                st.warning(f"⚠️ {total}件中 {error_count}件でエラーが発生しました。CSVの「件名」列が 'ERROR' の行を確認してください。")
             st.toast(f"✅ {total}件のメール生成が完了しました", icon="✅")
             st.rerun()
 
@@ -1263,6 +1462,364 @@ def _render_tab_history() -> None:
 
 
 # ---------------------------------------------------------------
+# タブ5: 音声管理
+# ---------------------------------------------------------------
+def _render_tab_audio(leads_df) -> None:
+    """音声管理タブを描画する（Step A: アップロード → Step B: 紐づけ → Step C: 文字起こし）"""
+    from src.audio_processor import AudioProcessor
+    from src.audio_matcher import AudioMatcher, MatchResult
+    from src.config import Config
+
+    st.subheader("🎙️ 音声管理")
+    st.caption(
+        "展示会当日の録音ファイルをアップロードし、来場者リードに紐づけて文字起こし・ニーズ抽出を行います。"
+    )
+
+    # ── Step A: ファイルアップロード ─────────────────────────────
+    st.markdown("### Step A: 音声ファイルアップロード")
+    st.caption(
+        "📂 ファイル命名規則: `YYYYMMDD_担当者名_連番.{mp3/m4a/wav}`　例: `20260424_営業A_001.m4a`  \n"
+        "担当者名がファイル名に含まれていると、リードへの自動紐づけ精度が上がります。"
+    )
+
+    uploaded_audios = st.file_uploader(
+        "音声ファイルをアップロード",
+        type=["mp3", "wav", "m4a"],
+        accept_multiple_files=True,
+        key="audio_uploader",
+        help="複数ファイルを同時にアップロード可能。25MB超のファイルは Whisper API の制限により非対応です。",
+    )
+
+    if uploaded_audios:
+        processor = AudioProcessor(api_key=Config.OPENAI_API_KEY)
+        matcher = AudioMatcher()
+
+        # メタデータ取得・コスト概算
+        meta_list = []
+        oversized = []
+        total_duration = 0.0
+        for f in uploaded_audios:
+            file_bytes = f.read()
+            meta = processor.get_audio_metadata(file_bytes, f.name)
+            rep_name = matcher.parse_rep_from_filename(f.name)
+            meta["filename"] = f.name
+            meta["rep_name"] = rep_name
+            meta["file_bytes"] = file_bytes
+            meta_list.append(meta)
+            if meta["size_mb"] > 25:
+                oversized.append(f.name)
+            else:
+                total_duration += meta["duration_sec"]
+
+        # session_state に保存
+        st.session_state["audio_files_meta"] = meta_list
+
+        # コスト概算表示
+        est_cost = processor.estimate_cost(total_duration)
+        col_a, col_b = st.columns(2)
+        col_a.metric("アップロード件数", f"{len(meta_list)} 件")
+        col_b.metric("合計録音時間", f"約 {int(total_duration / 60)} 分")
+        st.info(
+            f"💰 文字起こし費用の目安: **約 ${est_cost:.3f}**"
+            f"（Whisper API: $0.006/分、合計 {int(total_duration / 60)} 分）"
+        )
+        if oversized:
+            st.warning(
+                f"⚠️ 以下のファイルは 25MB を超えるため文字起こしできません。短く分割してください:\n"
+                + "\n".join(f"- {n}" for n in oversized)
+            )
+
+    files_meta = st.session_state.get("audio_files_meta", [])
+    if not files_meta:
+        st.info("音声ファイルをアップロードすると、紐づけと文字起こしを行えます。")
+        return
+
+    st.divider()
+
+    # ── Step A.5: 紐づけCSVアップロード（推奨）─────────────────────────
+    st.markdown("### Step A.5: 紐づけCSVアップロード（推奨）")
+    st.caption(
+        "担当者ごとに作成した紐づけCSVをアップロードしてください。  \n"
+        "ファイル名: `YYYYMMDD_担当者名_紐づけ.csv`（例: `20260425_営業A_紐づけ.csv`）  \n"
+        "CSVフォーマット: 1行目ヘッダ `filename,visitor_name`、2行目以降にデータ"
+    )
+
+    uploaded_mapping_csvs = st.file_uploader(
+        "紐づけCSVをアップロード",
+        type=["csv"],
+        accept_multiple_files=True,
+        key="audio_mapping_csv_uploader",
+        help="担当者ごとにCSVを分けてください。複数ファイルを同時アップロード可能。",
+    )
+
+    mapping_csv_data = []  # [{rep_name, df, csv_name}]
+    if uploaded_mapping_csvs:
+        _csv_matcher = AudioMatcher()
+        for f in uploaded_mapping_csvs:
+            try:
+                df_csv = pd.read_csv(f)
+                if "filename" not in df_csv.columns or "visitor_name" not in df_csv.columns:
+                    st.warning(
+                        f"⚠️ `{f.name}` に `filename` と `visitor_name` 列が必要です。スキップします。"
+                    )
+                    continue
+                rep = _csv_matcher.parse_rep_from_csv_filename(f.name)
+                mapping_csv_data.append({"rep_name": rep or "（不明）", "df": df_csv, "csv_name": f.name})
+            except Exception as e:
+                st.warning(f"⚠️ `{f.name}` の読み込みに失敗しました: {e}")
+
+        if mapping_csv_data:
+            for item in mapping_csv_data:
+                st.markdown(f"- **{item['rep_name']}**: {len(item['df'])}件 （`{item['csv_name']}`）")
+
+            if st.button("✅ 紐づけCSVを使って確定", type="primary", key="audio_csv_confirm_btn"):
+                _csv_match = AudioMatcher()
+                all_csv_results: List[MatchResult] = []
+                for item in mapping_csv_data:
+                    all_csv_results.extend(
+                        _csv_match.match_with_csv(
+                            mapping_df=item["df"],
+                            rep_name=item["rep_name"],
+                            audio_meta_list=files_meta,
+                            leads_df=leads_df,
+                        )
+                    )
+                assoc = {r.audio_filename: r.lead_idx for r in all_csv_results if r.lead_idx is not None}
+                st.session_state["audio_associations"] = assoc
+                st.session_state["audio_match_results"] = all_csv_results
+                st.session_state["audio_mapping_csvs"] = [item["df"] for item in mapping_csv_data]
+                st.session_state["audio_mapping_mode"] = "csv"
+                st.toast(f"✅ {len(assoc)}件の紐づけを確定しました（CSVモード）", icon="🎙️")
+                st.rerun()
+
+    st.markdown("---")
+    st.markdown("*または* ── 紐づけCSVなしで自動紐づけ ──")
+    st.markdown("---")
+
+    # ── Step B: 紐づけ確認 ────────────────────────────────────────
+    st.markdown("### Step B: リードへの紐づけ確認")
+
+    matcher = AudioMatcher()
+    _llm = st.session_state.get("email_gen") and st.session_state["email_gen"].llm
+    _rep_col = "rep_name" if "rep_name" in leads_df.columns else None
+    _timestamp_col = matcher.detect_timestamp_col(leads_df, llm=_llm)
+    match_results: List[MatchResult] = matcher.match(
+        audio_meta_list=files_meta,
+        leads_df=leads_df,
+        rep_col=_rep_col,
+        timestamp_col=_timestamp_col,
+        tolerance_minutes=Config.AUDIO_TIMESTAMP_TOLERANCE_MINUTES,
+    )
+    if st.session_state.get("audio_mapping_mode") != "csv":
+        st.session_state["audio_match_results"] = match_results
+
+    # 赤フラグ率チェック
+    red_rate = matcher.get_red_flag_rate(match_results)
+    if red_rate > Config.AUDIO_RED_FLAG_WARNING_THRESHOLD:
+        red_count = sum(1 for r in match_results if r.confidence == "red")
+        st.warning(
+            f"⚠️ **命名ルールが守られていないファイルが多数あります（{red_count}/{len(match_results)}件）**  \n"
+            f"ファイル名を `YYYYMMDD_担当者名_連番.m4a` の形式に変更してから再アップロードしてください。"
+        )
+
+    # 既存の手動設定を読み込む
+    saved_assoc: dict = st.session_state.get("audio_associations", {})
+
+    lead_options = ["（紐づけなし）"] + [
+        f"{row.get('visitor_name', '')} ({row.get('company_name', '')})"
+        for _, row in leads_df.iterrows()
+    ]
+    lead_idx_map = {i: idx for i, (idx, _) in enumerate(leads_df.iterrows(), start=1)}
+
+    pending_associations: dict = {}
+
+    # ── 🟢🟡 自動紐づけ結果 ─────────────────────────────────────────
+    for r in [r for r in match_results if r.confidence != "red"]:
+        conf_icon = {"green": "🟢", "yellow": "🟡"}.get(r.confidence, "⬜")
+        rep_label = r.rep_name or "（不明）"
+        col_icon, col_audio, col_lead = st.columns([1, 3, 4])
+        col_icon.markdown(f"**{conf_icon}**")
+        col_audio.markdown(
+            f"`{r.audio_filename}`  \n"
+            f"<small>担当者: {rep_label} / {int(r.duration_sec)}秒 / {r.note}</small>",
+            unsafe_allow_html=True,
+        )
+        if r.lead_idx is not None:
+            lead_row = leads_df.loc[r.lead_idx]
+            col_lead.markdown(
+                f"→ {lead_row.get('visitor_name', '')} ({lead_row.get('company_name', '')})"
+            )
+            pending_associations[r.audio_filename] = r.lead_idx
+        else:
+            col_lead.markdown("→ 紐づけ候補なし")
+
+    # ── 🔴 担当者名不明ファイル（個別選択 or まとめてスキップ）────────
+    red_results = [r for r in match_results if r.confidence == "red"]
+    if red_results:
+        with st.expander(
+            f"🔴 担当者名不明 {len(red_results)}件 — 個別に紐づけるか、スキップしてください",
+            expanded=True,
+        ):
+            st.caption(
+                "「（紐づけなし）」のままにすると音声コンテキストはメール生成に使用されません。"
+                "「✅ 紐づけを確定」を押すとスキップとして確定されます。"
+            )
+            for r in red_results:
+                col_icon, col_audio, col_lead = st.columns([1, 3, 4])
+                col_icon.markdown("**🔴**")
+                col_audio.markdown(
+                    f"`{r.audio_filename}`  \n"
+                    f"<small>担当者: （不明） / {int(r.duration_sec)}秒 / {r.note}</small>",
+                    unsafe_allow_html=True,
+                )
+                default_idx = 0
+                if r.audio_filename in saved_assoc:
+                    saved_lead_idx = saved_assoc[r.audio_filename]
+                    for li, di in lead_idx_map.items():
+                        if di == saved_lead_idx:
+                            default_idx = li
+                            break
+                sel = col_lead.selectbox(
+                    "リードを選択",
+                    options=range(len(lead_options)),
+                    format_func=lambda i: lead_options[i],
+                    index=default_idx,
+                    key=f"audio_sel_{r.audio_filename}",
+                    label_visibility="collapsed",
+                )
+                if sel > 0:
+                    pending_associations[r.audio_filename] = lead_idx_map[sel]
+
+    col_confirm, col_skip = st.columns([2, 3])
+    if col_confirm.button("✅ 紐づけを確定", type="primary", key="audio_confirm_btn"):
+        st.session_state["audio_associations"] = pending_associations
+        st.session_state["audio_match_results"] = match_results
+        st.session_state["audio_mapping_mode"] = "auto"
+        st.toast(f"✅ {len(pending_associations)}件の紐づけを確定しました", icon="🎙️")
+        st.rerun()
+    if red_results:
+        col_skip.caption(f"🔴 未紐づけ {len(red_results)}件はそのまま「確定」を押すとスキップされます")
+
+    confirmed_assoc = st.session_state.get("audio_associations", {})
+    if not confirmed_assoc:
+        return
+
+    # ── 録音し忘れ検出 ────────────────────────────────────────────
+    audio_results_saved = st.session_state.get("audio_match_results")
+    if audio_results_saved:
+        rep_col = "rep_name" if "rep_name" in leads_df.columns else None
+        mapping_dfs_saved = (
+            st.session_state.get("audio_mapping_csvs")
+            if st.session_state.get("audio_mapping_mode") == "csv"
+            else None
+        )
+        gaps = matcher.detect_gaps(audio_results_saved, leads_df, rep_col, mapping_dfs=mapping_dfs_saved)
+        if gaps:
+            lines = []
+            for g in gaps:
+                names_str = "、".join(g["likely_unrecorded"])
+                suffix = (
+                    f"（{names_str}さんの録音がない可能性）"
+                    if names_str
+                    else f"（{g['missing_count']}件の録音がない可能性）"
+                )
+                lines.append(
+                    f"- {g['rep_name']}：リード{g['lead_count']}件に対して"
+                    f"音声{g['audio_count']}件{suffix}"
+                )
+            st.warning("⚠️ **録音し忘れの可能性があります**\n" + "\n".join(lines))
+
+    st.divider()
+
+    # ── Step C: 文字起こし・ニーズ抽出 ───────────────────────────
+    st.markdown("### Step C: 文字起こし・ニーズ抽出")
+    st.caption(
+        f"確定済み紐づけ: {len(confirmed_assoc)}件  \n"
+        "Whisper API で文字起こしを行い、LLM でニーズを構造化抽出します。"
+    )
+
+    # 完了済みスキップ
+    done_count = sum(
+        1 for v in st.session_state.get("audio_transcripts", {}).values() if v
+    )
+    if done_count:
+        st.success(f"✅ {done_count}件の文字起こしが完了しています。")
+
+    if st.button(
+        f"▶ {len(confirmed_assoc)}件を文字起こし・ニーズ抽出",
+        type="primary",
+        key="audio_transcribe_btn",
+    ):
+        processor = AudioProcessor(
+            api_key=Config.OPENAI_API_KEY,
+            llm=st.session_state.get("email_gen") and st.session_state["email_gen"].llm,
+        )
+        transcripts: dict = dict(st.session_state.get("audio_transcripts", {}))
+        needs_map: dict = dict(st.session_state.get("audio_needs", {}))
+        file_bytes_map = {m["filename"]: m["file_bytes"] for m in files_meta}
+
+        prog = st.progress(0)
+        stat = st.empty()
+        total = len(confirmed_assoc)
+
+        for j, (filename, lead_idx) in enumerate(confirmed_assoc.items()):
+            stat.text(f"[{j+1}/{total}] {filename} を処理中...")
+            if lead_idx in transcripts and transcripts[lead_idx]:
+                prog.progress((j + 1) / total)
+                continue  # スキップ（既に完了）
+
+            file_bytes = file_bytes_map.get(filename)
+            if not file_bytes:
+                stat.warning(f"⚠️ {filename} のバイトデータが見つかりません")
+                prog.progress((j + 1) / total)
+                continue
+
+            try:
+                transcript = processor.transcribe(file_bytes, filename)
+                extracted = processor.extract_needs(transcript)
+                transcripts[lead_idx] = transcript
+                needs_map[lead_idx] = extracted
+            except Exception as e:
+                st.warning(f"⚠️ {filename}: {e}")
+
+            prog.progress((j + 1) / total)
+
+        st.session_state["audio_transcripts"] = transcripts
+        st.session_state["audio_needs"] = needs_map
+        stat.text("完了")
+        st.toast(f"✅ 文字起こし・ニーズ抽出が完了しました（{total}件）", icon="🎙️")
+        st.rerun()
+
+    # 結果プレビュー
+    transcripts = st.session_state.get("audio_transcripts", {})
+    needs_map = st.session_state.get("audio_needs", {})
+    if transcripts:
+        st.divider()
+        st.markdown("#### 抽出結果プレビュー")
+        for lead_idx, transcript in transcripts.items():
+            if not transcript:
+                continue
+            try:
+                lead_row = leads_df.loc[lead_idx]
+                name = f"{lead_row.get('visitor_name', '')} ({lead_row.get('company_name', '')})"
+            except KeyError:
+                name = f"リード index {lead_idx}"
+            needs = needs_map.get(lead_idx, {})
+            with st.expander(f"🎙️ {name}"):
+                if needs.get("summary"):
+                    st.markdown(f"**要約**: {needs['summary']}")
+                cols = st.columns(2)
+                for i, (key, label) in enumerate([
+                    ("issues", "課題"), ("needs", "ニーズ"),
+                    ("budget", "予算感"), ("temperature", "温度感"),
+                    ("decision_maker", "決裁者"),
+                ]):
+                    cols[i % 2].markdown(f"**{label}**: {needs.get(key, '—')}")
+                with st.expander("文字起こし全文"):
+                    st.text(transcript)
+
+
+# ---------------------------------------------------------------
 # タブ4: ナレッジベース確認
 # ---------------------------------------------------------------
 def _render_tab_knowledge() -> None:
@@ -1321,6 +1878,22 @@ def _render_tab_knowledge() -> None:
                 "ファイル一覧": ", ".join(data["files"][:5]) + ("..." if len(data["files"]) > 5 else ""),
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── アップロード済みPDF管理 ──────────────────────────────
+    pdf_files_in_db = by_type.get("pdf_upload", {}).get("files", [])
+    st.markdown("### 📄 アップロード済みPDF")
+    if not pdf_files_in_db:
+        st.caption("現在PDFは登録されていません。サイドバーからPDFをアップロードできます。")
+    else:
+        st.caption(f"{len(pdf_files_in_db)}件のPDFが登録されています。不要なファイルは削除できます。")
+        for pdf_name in pdf_files_in_db:
+            col_name, col_del = st.columns([5, 1])
+            col_name.markdown(f"📄 {pdf_name}")
+            if col_del.button("🗑️", key=f"del_pdf_{pdf_name}", help=f"{pdf_name} を削除"):
+                removed = db.remove_document(pdf_name)
+                st.session_state["db_built"] = db.is_index_built()
+                st.toast(f"✅ '{pdf_name}' を削除しました（{removed}チャンク）", icon="🗑️")
+                st.rerun()
 
     # ── 製品別チャンク数 ─────────────────────────────────────
     if by_product:
@@ -1394,7 +1967,7 @@ def main() -> None:
     """Streamlitアプリのメイン関数"""
 
     st.set_page_config(
-        page_title="NTX 展示会フォローアップエージェント",
+        page_title="展示会フォローアップエージェント",
         page_icon="🏭",
         layout="wide",
     )
@@ -1404,11 +1977,26 @@ def main() -> None:
     if not _initialize_components():
         st.stop()
 
-    st.title("🏭 NTX 展示会フォローアップエージェント")
+    st.title("🏭 展示会フォローアップエージェント")
     st.caption(
         "製造業DX展示会のリード情報をもとに、商談確度・関心製品・過去商談記録を踏まえた"
         "パーソナライズされたフォローアップメールを自動生成します。"
     )
+
+    # ── プライバシー通知（セッション初回のみ表示）─────────────────
+    if not st.session_state.get("privacy_notice_acknowledged", False):
+        with st.warning("", icon="🔒"):
+            st.markdown(
+                "**【データ取り扱いに関するご確認】**\n\n"
+                "このアプリはメール生成のために、アップロードされた情報（来場者氏名・メールアドレス・"
+                "会社名・商談メモ・CRM情報など）を **OpenAI API** に送信します。\n\n"
+                "送信前に、取り扱う顧客情報が **貴社の情報セキュリティポリシー** に照らして"
+                "外部サービスへの送信が許可されていることをご確認ください。\n\n"
+                "社外秘・機密情報を含む場合は、IT担当者または上長にご相談ください。"
+            )
+            if st.button("✅ 確認しました", key="privacy_ack_btn", type="primary"):
+                st.session_state["privacy_notice_acknowledged"] = True
+                st.rerun()
 
     # サイドバーを描画して選択ランクを取得
     selected_ranks = _render_sidebar()
@@ -1428,19 +2016,42 @@ def main() -> None:
 
     else:
         # ③ マッピング確定済み: 4タブUIを表示
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📋 リード一覧", "✉️ メール生成",
-            "📊 生成履歴・ダウンロード", "🗄️ ナレッジベース確認"
+        if st.session_state.get("raw_uploaded_df") is not None:
+            _redo_col, _ = st.columns([2, 5])
+            if _redo_col.button("↩️ カラムマッピングをやり直す", key="redo_mapping_main"):
+                st.session_state["mapping_confirmed"] = False
+                st.rerun()
+
+        # ── 次ステップ案内バナー ─────────────────────────────────
+        if st.session_state.get("show_next_step_kb") and not st.session_state.get("db_built"):
+            st.info(
+                "✅ **ステップ①完了！** 次は左サイドバーの "
+                "**「🔨 ① ナレッジベース構築」** ボタンを押してください。\n\n"
+                "製品資料（Markdown / PDF）をAIが読み込み、メール生成の精度が上がります。"
+            )
+        elif st.session_state.get("db_built") and not st.session_state.get("results"):
+            st.success(
+                "✅ **ステップ②完了！** **「✉️ ③ メール生成」** タブでフォローアップメールを生成できます。"
+            )
+
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📋 ① リード確認",
+            "🗄️ ② KB管理",
+            "✉️ ③ メール生成",
+            "📊 生成履歴・ダウンロード",
+            "🎙️ 音声管理",
         ])
 
         with tab1:
             _render_tab_leads(leads_df, selected_ranks)
         with tab2:
-            _render_tab_email(leads_df, selected_ranks)
-        with tab3:
-            _render_tab_history()
-        with tab4:
             _render_tab_knowledge()
+        with tab3:
+            _render_tab_email(leads_df, selected_ranks)
+        with tab4:
+            _render_tab_history()
+        with tab5:
+            _render_tab_audio(leads_df)
 
 
 if __name__ == "__main__":

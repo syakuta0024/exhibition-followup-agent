@@ -37,6 +37,33 @@ class Config:
     CHUNK_OVERLAP: int = 150       # チャンク間のオーバーラップ文字数
 
     # ---------------------------------------------------------------
+    # APIコスト見積もり設定（一括生成前の確認ダイアログ用）
+    # gpt-5.4-nano 料金 (2026年4月時点)
+    # ---------------------------------------------------------------
+    LLM_PRICE_INPUT_PER_1M: float = 0.20    # $/1M 入力トークン
+    LLM_PRICE_OUTPUT_PER_1M: float = 1.25   # $/1M 出力トークン
+    # 1リードあたりの推定トークン数（プロンプト構造から算出）
+    # 入力: システムプロンプト(~400) + リードデータ(~200) + RAG3チャンク(~800)
+    #       + CRM(~200) + Web検索(~300) + 展示会情報+指示(~300) = ~2200
+    EST_INPUT_TOKENS_PER_LEAD: int = 2200
+    # 出力: メール本文・件名・CTA（ランク平均 ~350字 → ~350トークン）
+    EST_OUTPUT_TOKENS_PER_LEAD: int = 400
+    # ランク推定LLM（有効時の追加入力トークン、出力は1トークンなので無視）
+    EST_RANK_EXTRA_INPUT_TOKENS: int = 300
+    # 1リードあたりの推定処理時間（秒）
+    EST_SECONDS_PER_LEAD_BASE: float = 8.0   # メール生成のみ
+    EST_SECONDS_PER_LEAD_WEB: float = 3.0    # Web検索追加分
+
+    # ---------------------------------------------------------------
+    # 音声文字起こし（Whisper API）
+    # ---------------------------------------------------------------
+    WHISPER_MODEL: str = "whisper-1"
+    WHISPER_PRICE_PER_MIN: float = 0.006          # $/分
+    WHISPER_MAX_FILE_MB: int = 25                 # Whisper APIの上限（MB）
+    AUDIO_TIMESTAMP_TOLERANCE_MINUTES: int = 5   # タイムスタンプ許容誤差（分）。展示会は5〜10分で来場者が入れ替わるため5分に設定。
+    AUDIO_RED_FLAG_WARNING_THRESHOLD: float = 0.30  # 赤フラグ率の警告閾値
+
+    # ---------------------------------------------------------------
     # リードCSVカラムマッピング定義
     # RX Japan Lead Manager / Q-PASS / Sansan 等の異なるカラム名に対応。
     # 未マッピングのカスタム質問列は extra_ プレフィックスで自動保持され、
@@ -99,6 +126,24 @@ class Config:
         "future_requests": {
             "label": "今後のご要望",
             "候補カラム名": ["要望", "ご要望", "今後の希望", "Requests", "future_requests"],
+        },
+        "rep_name": {
+            "label": "担当者名（ブース担当営業）",
+            "候補カラム名": [
+                "担当者名", "担当者", "営業担当", "担当営業",
+                "ブース担当者", "対応者",
+                "Sales_Rep", "sales_rep", "Rep", "rep",
+                "Salesperson", "Staff", "Assigned_To",
+            ],
+        },
+        "scan_time": {
+            "label": "スキャン時刻",
+            "候補カラム名": [
+                "スキャン時刻", "スキャン日時", "来場時刻", "受付時刻",
+                "スキャン時間", "QRスキャン時刻",
+                "Scan_Time", "scan_time", "Visit_Time",
+                "Timestamp", "timestamp", "Scanned_At",
+            ],
         },
     }
 
