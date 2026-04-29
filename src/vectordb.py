@@ -799,6 +799,42 @@ class VectorDBManager:
             "parent_store_size_kb": parent_store_size_kb,
         }
 
+    def remove_document(self, source_name: str) -> int:
+        """
+        指定ファイル名のチャンクをすべてベクトルDBから削除する。
+
+        Parameters
+        ----------
+        source_name : str
+            削除対象のファイル名（source_file メタデータと完全一致）
+
+        Returns
+        -------
+        int
+            削除したチャンク数（0 の場合は該当なし）
+        """
+        try:
+            results = self.vectorstore._collection.get(
+                where={"source_file": source_name},
+                include=[],
+            )
+            ids = results.get("ids", [])
+            if ids:
+                self.vectorstore._collection.delete(ids=ids)
+                logger.info(f"  ドキュメント削除: {source_name} ({len(ids)}チャンク)")
+
+            keys_to_delete = [k for k in self._parent_store if source_name in k]
+            for k in keys_to_delete:
+                del self._parent_store[k]
+            if keys_to_delete:
+                self._save_parent_store()
+
+            self._try_rebuild_bm25_corpus()
+            return len(ids)
+        except Exception as e:
+            logger.warning(f"  ドキュメント削除エラー ({source_name}): {e}")
+            return 0
+
     def search_for_display(
         self,
         query: str,

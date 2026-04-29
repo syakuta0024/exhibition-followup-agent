@@ -1,0 +1,9 @@
+default_ranks:
+- A
+- B
+- C
+enable_rank_estimation: true
+enable_web_search: true
+leads_csv_path: data/leads.csv
+output_path: output/emails.csv
+sender_company: NSW株式会社

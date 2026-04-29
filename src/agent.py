@@ -52,6 +52,9 @@ class FollowUpAgent:
         on_step=None,
         enable_web_search: bool = True,
         enable_rank_estimation: bool = True,
+        sender_company: str = "",
+        transcript: str = "",
+        extracted_needs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -178,18 +181,22 @@ class FollowUpAgent:
         # ── Step 4: Web検索 ──────────────────────────────────────
         web_info: Dict[str, Any] = {"success": False, "summary": "", "results": []}
         if enable_web_search and company:
-            _step(4, "Web検索", "running", f"{company}の最新情報を検索中...")
+            _step(4, "Web検索", "running", f"{company}の事業情報・最新動向を検索中...")
             try:
                 web_info = self.web_searcher.search_company(company)
                 if web_info["success"]:
-                    first_title = web_info["results"][0]["title"][:40] if web_info["results"] else ""
+                    profile_cnt = sum(1 for r in web_info["results"] if r.get("section") == "profile")
+                    news_cnt = sum(1 for r in web_info["results"] if r.get("section") == "news")
                     _step(4, "Web検索", "done",
-                          f"{len(web_info['results'])}件ヒット: {first_title}...")
+                          f"事業情報 {profile_cnt}件 / 最新動向 {news_cnt}件")
                 else:
+                    error_msg = web_info.get("error", "不明なエラー")
+                    logger.warning(f"  Web検索: 結果なし — {error_msg}")
                     _step(4, "Web検索", "warning",
-                          f"結果なし（{web_info['error']}）")
+                          f"結果なし（{error_msg}）")
             except Exception as e:
-                _step(4, "Web検索", "warning", f"検索失敗: {e}")
+                logger.error(f"  Web検索 例外: {type(e).__name__}: {e}")
+                _step(4, "Web検索", "warning", f"検索エラー: {type(e).__name__}: {e}")
                 web_info = {"success": False, "summary": "", "results": []}
         else:
             _step(4, "Web検索", "skip", "スキップ（無効）")
@@ -206,6 +213,7 @@ class FollowUpAgent:
 
         # ── Step 6: メール生成 ──────────────────────────────────
         _step(6, "メール生成中", "running", "LLMがメール文を生成中...")
+        audio_context = _build_audio_context(transcript, extracted_needs)
         email = self.email_gen.generate(
             lead=lead,
             tech_context=tech_context,
@@ -213,6 +221,8 @@ class FollowUpAgent:
             crm_structured=crm_structured,
             exhibition_info=exhibition_info,
             web_context=web_info.get("summary", ""),
+            sender_company=sender_company,
+            audio_context=audio_context,
         )
         _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
         _step(7, "完了", "done", "メール生成が完了しました")
@@ -430,6 +440,29 @@ class FollowUpAgent:
 
         logger.info(f"全リード処理完了: {len(results)}件")
         return results
+
+
+def _build_audio_context(transcript: str, needs: Optional[Dict[str, Any]]) -> str:
+    """音声コンテキスト文字列を組み立てる（メール生成の最優先情報として使用）"""
+    if not transcript and not needs:
+        return ""
+    parts = []
+    if needs and any(needs.get(k) for k in ("issues", "needs", "budget", "decision_maker", "temperature")):
+        parts.append("【音声から抽出したニーズ・課題】")
+        for key, label in [
+            ("issues", "課題"),
+            ("needs", "ニーズ"),
+            ("budget", "予算感"),
+            ("decision_maker", "決裁者"),
+            ("temperature", "温度感"),
+        ]:
+            if needs.get(key):
+                parts.append(f"- {label}: {needs[key]}")
+        if needs.get("summary"):
+            parts.append(f"- 要約: {needs['summary']}")
+    if transcript:
+        parts.append(f"\n【会話録音の文字起こし（参考）】\n{transcript[:2000]}")
+    return "\n".join(parts)
 
 
 # -------------------------

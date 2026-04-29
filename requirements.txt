@@ -10,4 +10,9 @@ pandas
 rank_bm25
 rapidfuzz
 pypdf
-duckduckgo-search
+ddgs
+mutagen
+pyyaml
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

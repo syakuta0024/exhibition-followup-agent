@@ -106,7 +106,7 @@ OUTPUT_FORMAT_INSTRUCTION = """
 【本文】
 （完全なメール文面。以下の構成で書くこと：
 1. 宛名（会社名・部署・役職・氏名 様）
-2. 挨拶（お世話になっております。NTX株式会社 営業部の●●でございます。）
+2. 挨拶（お世話になっております。{会社名} 営業部の●●でございます。）
 3. 展示会来場のお礼
 4. 展示会での会話の振り返り（確度A/Bの場合のみ）
 5. 製品情報・提案（確度に応じて深さを変える）
@@ -154,6 +154,8 @@ class EmailGenerator:
         crm_structured: Optional[Dict[str, Any]] = None,
         exhibition_info: Optional[Dict[str, str]] = None,
         web_context: str = "",
+        sender_company: str = "",
+        audio_context: str = "",
     ) -> Dict[str, str]:
         """
         フォローアップメールを生成する。
@@ -184,9 +186,10 @@ class EmailGenerator:
         )
 
         # プロンプト組み立て
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt(sender_company=sender_company)
         human_prompt = self._build_human_prompt(
-            lead, policy, tech_context, crm_context, crm_structured, exhibition_info, web_context
+            lead, policy, tech_context, crm_context, crm_structured, exhibition_info,
+            web_context, audio_context
         )
 
         # LLM呼び出し
@@ -207,22 +210,18 @@ class EmailGenerator:
         logger.info(f"  → 生成完了: 件名「{result['subject']}」")
         return result
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, sender_company: str = "") -> str:
         """システムプロンプトを返す"""
+        company = sender_company or "弊社"
         return (
-            "あなたはNTX株式会社の営業担当者です。"
-            "NTX株式会社は製造業向けDXソリューションの独立系SIerで、"
-            "Sorani（IoTプラットフォーム）、DigiMA（デジタルツイン）、"
-            "SmartVision（産業用スマートグラス）、NTX-OCR（AI帳票デジタル化）、"
-            "FactoryBrain（クラウド型生産管理）、EdgeGuard（エッジAI異常検知）"
-            "の6製品を展開しています。\n\n"
+            f"あなたは{company}の営業担当者です。"
             "展示会にご来場いただいたお客様に対して、丁寧かつ効果的なフォローアップメールを"
             "日本語ビジネスメール形式で作成してください。\n\n"
+            "自社の製品・サービス情報は提供されるコンテキスト（技術資料・過去商談記録）を参照し、"
+            "実際に提供できる内容のみをメールに含めてください。\n\n"
             "署名は以下を使用してください:\n"
             "---\n"
-            "NTX株式会社 営業部\n"
-            "Tel: 03-XXXX-XXXX | Email: sales@ntx-dx.co.jp\n"
-            "https://www.ntx-dx.co.jp\n"
+            f"{company} 営業部\n"
             "---"
         )
 
@@ -235,6 +234,7 @@ class EmailGenerator:
         crm_structured: Optional[Dict[str, Any]] = None,
         exhibition_info: Optional[Dict[str, str]] = None,
         web_context: str = "",
+        audio_context: str = "",
     ) -> str:
         """
         ユーザープロンプトを組み立てる。
@@ -309,9 +309,19 @@ class EmailGenerator:
                 "不自然になる場合は無視して構いません。\n"
             )
 
+        # ── 音声コンテキストセクション（最優先）──────────────────────
+        audio_section = ""
+        if audio_context.strip():
+            audio_section = (
+                f"## ★最優先情報（録音音声より）\n"
+                f"※ 以下の情報を最も重視してメールを作成してください。\n"
+                f"{audio_context}\n"
+            )
+
         # ── セクション結合 ────────────────────────────────────────
         context_sections = "\n".join(
-            s for s in [exhibition_section, extra_section, crm_section, tech_section, web_section]
+            s for s in [audio_section, exhibition_section, extra_section,
+                        crm_section, tech_section, web_section]
             if s.strip()
         )
         if context_sections:
