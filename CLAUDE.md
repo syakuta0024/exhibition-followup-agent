@@ -88,7 +88,6 @@ print(cfg)
 ### 注意事項（Claude Code が守るルール）
 
 - **プロジェクトルートから実行**すること（相対パスが壊れる）
-- ユーザーから明示的に求められない限り `streamlit run app.py` は起動しない
 - KB 未構築の状態で `run_generate()` を実行しない（`run_check()` で確認してから）
 - 出力ファイルは `output/emails.csv`（デフォルト）に保存される
 - Gmail 下書き機能は `credentials/credentials.json` が必要（初回のみブラウザ認証）
@@ -101,19 +100,11 @@ print(cfg)
 
 - **想定ユーザー**: 営業担当（展示会翌日にフォローメールを一括送信したい）
 - **LLM**: OpenAI `gpt-5.4-nano`（APIキー必要）
-- **UI**: Streamlit（`app.py`）
 - **会社非依存**: 特定企業名はコードに含まない。送信元会社名はUIで入力し `sender_company` として全処理に伝播する
 
 ---
 
-## 起動方法
-
-```bash
-# 必ず .venv 内の streamlit を使う（グローバル Python では依存パッケージが不足する）
-.venv/Scripts/streamlit run app.py   # Windows
-# または
-streamlit run app.py  # .venv がアクティブな場合
-```
+## 環境セットアップ
 
 `.env` ファイルに `OPENAI_API_KEY=sk-...` を設定すること。
 
@@ -137,13 +128,12 @@ pip install some-package
 
 ```
 exhibition-followup-agent/
-├── app.py                  # StreamlitメインUI（全タブ・サイドバー）
 ├── cli_config.yaml         # 設定（sender_company・ランク・パスなど）
 ├── output/                 # メール生成結果CSV（output/emails.csv）
 ├── credentials/            # Gmail OAuth 認証情報（.gitignore 対象）
 │   ├── credentials.json    # Google Cloud からダウンロード（コミット禁止）
 │   └── token.json          # 初回認証後に自動生成（コミット禁止）
-├── .venv/                  # 仮想環境（streamlit・依存ライブラリはここに入れる）
+├── .venv/                  # 仮想環境（依存ライブラリはここに入れる）
 ├── .claude/
 │   └── commands/           # Skills（スラッシュコマンド）
 │       ├── email-workflow.md   # /email-workflow: メール生成全体フロー
@@ -248,57 +238,17 @@ AUDIO_RED_FLAG_WARNING_THRESHOLD: float = 0.30  # 赤フラグ率の警告閾値
 
 ---
 
-## 一括生成の確認ダイアログ・途中再開
-
-「全件一括生成」ボタンは2ステップ確認フロー：
-
-1. ボタン押下 → コスト見積もりテーブルを表示（件数・トークン・$コスト・所要時間）
-2. 「✅ 実行する」で本番実行 / 「❌ キャンセル」で戻る
-
-### 途中再開設計
-
-- 生成結果はループ内で **毎件** `session_state["results"]` に逐次保存される（中断しても生成済み分は消えない）
-- 再度「全件一括生成」を押したとき `session_state["results"]` に既存データがあれば、確認ダイアログが切り替わる：
-  - **「▶️ 続きから実行（残りXX件）」**（デフォルト）— 生成済みをスキップし残り件数のみ実行。コスト見積もりも残り件数で再計算。
-  - **「🔄 最初から実行（生成済みを上書き）」** — `session_state["results"]` をクリアして全件再実行。
-- ブラウザが落ちた・途中でタブを閉じた場合でも、「生成履歴・ダウンロード」タブから生成済み分をCSVダウンロードできる。
-
-完了後、エラー件数がある場合は警告を表示（CSVの `subject='ERROR'` 行を確認するよう案内）。
-
----
-
 ## CSVカラムマッピング
 
 リードCSVはRX Japan Lead Manager / Q-PASS / Sansan 等の異なるカラム名に対応。
 `Config.REQUIRED_FIELDS` と `Config.OPTIONAL_FIELDS` で候補カラム名を定義。
 マッピング外のカスタム質問列は `extra_` プレフィックスで自動保持され、メール生成のコンテキストに使用される。
 
-### 必須フィールドのバリデーション
-
-必須フィールド（氏名・会社名・メールアドレス）が1つでも未マッピングの場合、「✅ マッピング確定」ボタンを押しても `st.error` を表示して **処理をブロック**する（`return` で確定処理に進まない）。警告のみで続行させる設計は廃止済み。
-
-### マッピングのやり直し
-
-確定後でも以下の2箇所に「↩️ カラムマッピングをやり直す」ボタンが表示される：
-
-- **サイドバー**: 確定済みステータスの下
-- **タブ画面上部**: タブの上に常時表示
-
-クリックすると `mapping_confirmed = False` になりマッピング画面に戻る。元CSVデータ（`raw_uploaded_df`）は残るので再アップロード不要。デモデータ読み込み時はボタン非表示（元データなし）。
-
 ---
 
 ## 送信元会社名（会社非依存設計）
 
-アプリは特定の企業名をコードに持たない。送信元会社名はUIで入力し、以下の経路で伝播する。
-
-```
-app.py サイドバー（🏢 送信元会社名 入力欄）
-  → session_state["sender_company"]
-  → FollowUpAgent.process_lead(sender_company=...)
-  → EmailGenerator.generate(sender_company=...)
-  → _build_system_prompt(sender_company=...)  # 挨拶・署名に使用
-```
+アプリは特定の企業名をコードに持たない。送信元会社名は `cli_config.yaml` の `sender_company` または Skills の対話で入力し、`FollowUpAgent.process_lead(sender_company=...)` → `EmailGenerator.generate(sender_company=...)` → `_build_system_prompt(sender_company=...)` の順で挨拶・署名に使用される。
 
 - 未入力の場合は `"弊社"` で代替（エラーにならない）
 - システムプロンプトには会社名のみ渡す。製品・サービスの説明は RAG（tech_documents）から取得するため、プロンプトへのハードコードは禁止
@@ -308,53 +258,6 @@ app.py サイドバー（🏢 送信元会社名 入力欄）
 `data/tech_documents/` と `data/crm_records/` は **空ディレクトリ**として管理する。
 利用者が自社のMarkdownファイルを配置し、「🔨 ナレッジベース構築」で取り込む運用。
 デモ用の架空企業データをこれらのディレクトリにコミットしないこと。
-
----
-
-## プライバシー通知設計
-
-顧客情報（氏名・メール・商談メモ・CRM情報）がOpenAI APIに送信されることを、2段階で明示する。
-
-### セッション初回バナー（`app.py` main関数内）
-
-- `session_state["privacy_notice_acknowledged"]` が `False` の間だけ表示
-- タイトル直下に `st.warning` で表示。送信されるデータの種類・送信先・社内ポリシー確認を促す文言を記載
-- 「✅ 確認しました」ボタンを押すとフラグが `True` になり非表示になる（セッション中は再表示しない）
-- アプリ再起動（セッションリセット）ごとに再表示される設計（意図的）
-
-### 常設キャプション（サイドバー）
-
-データ入力の直下に1行の注意書きを常時表示：
-
-| 場所 | 文言 |
-|---|---|
-| リードCSVアップロード欄下 | `🔒 アップロードされたデータはメール生成のためOpenAI APIに送信されます` |
-| CRMアップロード欄下 | `🔒 CRM情報もメール生成のためOpenAI APIに送信されます` |
-
----
-
-## Streamlit セッション設計の注意点
-
-- `VectorDBManager` と `EmailGenerator` は `session_state` にキャッシュされる（初期化コストが高い）
-- `FollowUpAgent` はページロードのたびに**毎回再生成**する設計（ソースファイル変更を即反映するため）
-- Streamlit のホットリロードはモジュールキャッシュを保持するため、`src/` 配下のファイルを変更した場合は**Streamlit を完全再起動**（Ctrl+C → `streamlit run app.py`）しないと反映されないことがある
-
-## DataFrame インデックス保全ルール
-
-`audio_transcripts` / `audio_needs` は **`leads_df` の元インデックス**をキーとする。
-これらを参照するコードは全て元インデックスが保たれている前提で動いているため、
-DataFrame を加工する際に `reset_index` を使うと音声コンテキストが取れなくなる。
-
-```python
-# NG: reset_index(drop=True) で 0,1,2... に振り直すと audio_transcripts のキーと不一致
-return df[df["lead_rank"].isin(ranks)].reset_index(drop=True)
-
-# OK: フィルター後もインデックスをそのまま維持する
-return df[df["lead_rank"].isin(ranks)]
-```
-
-`src/utils.py` の `filter_leads_by_rank` はこのルールに従い `reset_index` を使わない実装になっている。
-新たに DataFrame をフィルター・スライスする処理を追加するときも同様に注意すること。
 
 ---
 
@@ -423,46 +326,6 @@ response = client.audio.transcriptions.create(
 )
 ```
 
-### コンテキスト伝播経路
-
-```
-app.py 音声管理タブ（🎙️）
-  → session_state["audio_transcripts"][lead_idx]
-  → session_state["audio_needs"][lead_idx]
-  → FollowUpAgent.process_lead(transcript=..., extracted_needs=...)
-  → _build_audio_context() → audio_context str
-  → EmailGenerator.generate(audio_context=...)  # プロンプト最上部に挿入
-```
-
-### session_state キー
-
-| キー | 型 | 内容 |
-|---|---|---|
-| `audio_files_meta` | `list[dict]` | アップロード済みファイルメタ `{filename, duration_sec, start_time, file_bytes, rep_name}` |
-| `audio_associations` | `dict` | 確定した紐づけ `{filename: lead_idx}` |
-| `audio_transcripts` | `dict` | 文字起こし結果 `{lead_idx: str}` |
-| `audio_needs` | `dict` | LLM抽出ニーズ `{lead_idx: dict}` |
-
----
-
-## ステップ進捗インジケーター
-
-サイドバー上部に ①②③ の3ステップを ✅/🔷/⬜ アイコンで可視化し、次に操作すべき場所を強調する。
-
-### 状態遷移
-
-| 状態 | インジケーター | KB構築ボタン | メインエリアバナー |
-|---|---|---|---|
-| 初期 | `🔷① ⬜② ⬜③` | secondary | なし |
-| マッピング確定後 | `✅① 🔷②` | **primary（青）** | ✅①完了 → ②KB構築へ |
-| KB構築完了後 | `✅① ✅② 🔷③` | secondary | ✅②完了 → ③メール生成へ |
-
-### 関連 session_state フラグ
-
-- `mapping_confirmed` — CSVカラムマッピング確定後 `True`
-- `db_built` — ナレッジベース構築完了後 `True`
-- `show_next_step_kb` — マッピング確定後 `True`、KB構築後 `False`（バナー表示制御）
-
 ---
 
 ## ナレッジベース管理（PDFの削除）
@@ -474,39 +337,12 @@ app.py 音声管理タブ（🎙️）
 - BM25コーパスを自動再構築
 - 戻り値: 削除したチャンク数
 
-UIはナレッジベース確認タブの「📄 アップロード済みPDF」セクションで、各ファイルに 🗑️ ボタンを表示。クリックで即削除・即リフレッシュ。
-
----
-
-## オプション機能の起動時チェック
-
-一部の機能はオプションパッケージに依存する。`app.py` 起動時にモジュールレベルで可否を確認し、
-使えない場合はUIを無効化して営業担当にやさしいメッセージを表示する（エラーは出さない）。
-
-| 定数 | パッケージ | 無効時の挙動 |
-|---|---|---|
-| `PYPDF_AVAILABLE` | `pypdf` | PDFアップロード欄を非表示にし「IT担当者にご連絡ください」を表示 |
-| `MUTAGEN_AVAILABLE` | `mutagen` | 「🎙️ 音声管理」タブを非表示にし「IT担当者にご連絡ください」を表示 |
-
-```python
-# app.py 冒頭（モジュールレベル）
-try:
-    import pypdf
-    PYPDF_AVAILABLE = True
-except ImportError:
-    PYPDF_AVAILABLE = False
-```
-
-新しいオプション機能を追加する際も同じパターンで `XXX_AVAILABLE` フラグを定義し、
-UIの条件分岐に使うこと。
-
 ---
 
 ## 主要な依存ライブラリ
 
 | ライブラリ | 用途 |
 |---|---|
-| `streamlit` | UI |
 | `langchain` + `langchain-openai` | LLM・Embedding |
 | `langchain-chroma` | ベクトルDB |
 | `rank_bm25` | BM25ハイブリッド検索 |
