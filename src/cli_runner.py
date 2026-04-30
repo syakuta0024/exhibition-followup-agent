@@ -36,6 +36,15 @@ def save_cli_config(config: Dict[str, Any]) -> None:
         yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
 
 
+def mask_api_key(key: str) -> str:
+    """APIキーをマスキングして表示用文字列を返す。末尾4文字のみ表示。"""
+    if not key:
+        return "未設定 → .env に OPENAI_API_KEY を設定してください"
+    if len(key) < 4:
+        return "設定済み（短い値）"
+    return f"設定済み（***...{key[-4:]}）"
+
+
 def run_check() -> Dict[str, Any]:
     """
     環境・設定の健全性チェック。
@@ -136,6 +145,21 @@ def run_check() -> Dict[str, Any]:
             "label": "ナレッジベース (KB)",
             "status": "warning",
             "detail": "未構築 → /email-workflow の Step 3 でナレッジベース構築を実行してください",
+        })
+
+    # 8. Gmail credentials
+    creds_path = Path("credentials/credentials.json")
+    if creds_path.exists():
+        items.append({
+            "label": "Gmail credentials",
+            "status": "ok",
+            "detail": "credentials.json 配置済み（Gmail下書き機能が利用可能）",
+        })
+    else:
+        items.append({
+            "label": "Gmail credentials",
+            "status": "warning",
+            "detail": "credentials.json 未配置のため Gmail下書き機能は利用できません。配置方法は README を参照してください",
         })
 
     any_error = any(i["status"] == "error" for i in items)
