@@ -18,7 +18,7 @@
 
 | Skill | ファイル | 役割 |
 |---|---|---|
-| `/email-workflow` | [.claude/commands/email-workflow.md](.claude/commands/email-workflow.md) | メール生成全体フロー（Step 1〜Gmail下書きまで） |
+| `/email-workflow` | [.claude/commands/email-workflow.md](.claude/commands/email-workflow.md) | メール生成全体フロー（Step 0〜Gmail下書きまで） |
 | `/csv-mapping` | [.claude/commands/csv-mapping.md](.claude/commands/csv-mapping.md) | カラムマッピング確認 + 名前表記ゆれの対話確認 |
 | `/audio-matching` | [.claude/commands/audio-matching.md](.claude/commands/audio-matching.md) | 音声ファイル紐づけ・文字起こし |
 | `/inspect-data` | [.claude/commands/inspect-data.md](.claude/commands/inspect-data.md) | データ品質チェック（読み取り専用） |
@@ -92,11 +92,21 @@ print(cfg)
 - 出力ファイルは `output/emails.csv`（デフォルト）に保存される
 - Gmail 下書き機能は `credentials/credentials.json` が必要（初回のみブラウザ認証）
 
+### Skills 共通の対話ルール
+
+全 Skill の確認ステップでのユーザー応答の解釈:
+
+| 応答の種類 | 例 | 対応 |
+|---|---|---|
+| 明確な肯定 → 次のステップへ進む | 「OK」「はい」「いいよ」「進めて」「了解」「お願いします」 | 次のステップへ即時進む |
+| 曖昧な応答 → 確認を取る | 「うん」「大丈夫」「いいです」「まあ」 | 「進めてもよろしいですか？」と再確認してから進む |
+| 否定・追加要望 → 対応 | 「いや」「待って」「変更したい」など | ユーザーの意図を汲み取り対応してから再確認 |
+
 ---
 
 ## プロジェクト概要
 
-展示会で収集したリードCSVをもとに、来場者1人ひとりに最適化したフォローアップメールをAIで生成するStreamlitアプリ。
+展示会で収集したリードCSVをもとに、来場者1人ひとりに最適化したフォローアップメールをAIで生成するClaude Code Skills ベースのエージェント。
 
 - **想定ユーザー**: 営業担当（展示会翌日にフォローメールを一括送信したい）
 - **LLM**: OpenAI `gpt-5.4-nano`（APIキー必要）
