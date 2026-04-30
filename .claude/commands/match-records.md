@@ -28,8 +28,10 @@
 import pandas as pd
 from src.config import Config
 from src.utils import load_leads, auto_map_columns, apply_column_mapping
+from src.cli_runner import load_cli_config
+cfg = load_cli_config()
 
-df = load_leads('data/leads.csv')
+df = load_leads(cfg.get('leads_csv_path', 'data/leads.csv'))
 mapping = auto_map_columns(df.columns.tolist(), {**Config.REQUIRED_FIELDS, **Config.OPTIONAL_FIELDS})
 df = apply_column_mapping(df, mapping)
 
@@ -71,7 +73,9 @@ from src.utils import load_leads, auto_map_columns, apply_column_mapping
 from src.crm_matcher import CRMMatcher
 
 # リードCSV
-df = load_leads('data/leads.csv')
+from src.cli_runner import load_cli_config
+cfg = load_cli_config()
+df = load_leads(cfg.get('leads_csv_path', 'data/leads.csv'))
 mapping = auto_map_columns(df.columns.tolist(), {**Config.REQUIRED_FIELDS, **Config.OPTIONAL_FIELDS})
 df = apply_column_mapping(df, mapping)
 

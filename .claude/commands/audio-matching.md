@@ -27,7 +27,7 @@
 import sys, os
 sys.stdout.reconfigure(encoding='utf-8')
 
-audio_dir = 'test_m4a/音声データ'  # ユーザーから取得したパスに置き換える
+audio_dir = '<AUDIO_DIR>'  # Step0 で確認したフォルダパスに置き換える
 exts = ('.m4a', '.mp3', '.wav')
 
 files = [f for f in os.listdir(audio_dir) if f.lower().endswith(exts)]
@@ -53,7 +53,9 @@ from src.utils import load_leads, auto_map_columns, apply_column_mapping
 from src.audio_matcher import AudioMatcher
 
 # リードCSV読み込み
-df = load_leads('data/leads.csv')
+from src.cli_runner import load_cli_config
+cfg = load_cli_config()
+df = load_leads(cfg.get('leads_csv_path', 'data/leads.csv'))
 mapping = auto_map_columns(df.columns.tolist(), {**Config.REQUIRED_FIELDS, **Config.OPTIONAL_FIELDS})
 df = apply_column_mapping(df, mapping)
 
@@ -61,7 +63,7 @@ matcher = AudioMatcher()
 
 # 音声ファイルのメタデータ取得（mutagen が使える場合）
 import os
-audio_dir = 'test_m4a/音声データ'  # ユーザーから取得したパスに置き換える
+audio_dir = '<AUDIO_DIR>'  # Step0 で確認したフォルダパスに置き換える
 audio_meta_list = []
 for fname in os.listdir(audio_dir):
     if fname.lower().endswith(('.m4a', '.mp3', '.wav')):

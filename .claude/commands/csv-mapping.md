@@ -24,7 +24,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 from src.config import Config
 from src.utils import load_leads, auto_map_columns, apply_column_mapping
 
-df = load_leads('data/leads.csv')
+from src.cli_runner import load_cli_config
+cfg = load_cli_config()
+df = load_leads(cfg.get('leads_csv_path', 'data/leads.csv'))
 all_fields = {**Config.REQUIRED_FIELDS, **Config.OPTIONAL_FIELDS}
 mapping = auto_map_columns(df.columns.tolist(), all_fields)
 
@@ -75,7 +77,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 from src.config import Config
 from src.utils import load_leads, auto_map_columns, apply_column_mapping
 
-df = load_leads('data/leads.csv')
+from src.cli_runner import load_cli_config
+cfg = load_cli_config()
+df = load_leads(cfg.get('leads_csv_path', 'data/leads.csv'))
 mapping = auto_map_columns(df.columns.tolist(), {**Config.REQUIRED_FIELDS, **Config.OPTIONAL_FIELDS})
 df = apply_column_mapping(df, mapping)
 

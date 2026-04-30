@@ -1,11 +1,53 @@
 # email-workflow — メール生成ワークフロー（全体）
 
 展示会フォローアップメールを生成して Gmail 下書きに保存するまでの
-全体フローを案内するスキル。Step 1〜7 を順番に実行する。
+全体フローを案内するスキル。Step 0〜7 を順番に実行する。
 
 ---
 
 ## 実行フロー
+
+### Step 0: 現在の設定確認
+
+```bash
+.venv/Scripts/python -c "
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+from src.cli_runner import load_cli_config
+from src.config import Config
+
+cfg = load_cli_config()
+
+print('━━━ 現在の設定 ━━━')
+sender = cfg.get('sender_company', '')
+if sender:
+    print(f'■ 送信元会社名: {sender}（保存済み）')
+else:
+    print('■ 送信元会社名: 未設定 → 入力してください')
+
+leads_path = cfg.get('leads_csv_path', 'data/leads.csv')
+label = 'カスタム' if leads_path != 'data/leads.csv' else 'デフォルト'
+print(f'■ リードCSV:    {leads_path}（{label}）')
+
+output_path = cfg.get('output_path', 'output/emails.csv')
+label2 = 'カスタム' if output_path != 'output/emails.csv' else 'デフォルト'
+print(f'■ 出力先:       {output_path}（{label2}）')
+
+api_msg = '設定済み' if Config.OPENAI_API_KEY else '未設定 → .env に OPENAI_API_KEY を設定してください'
+print(f'■ APIキー:      {api_msg}')
+print()
+print('■ 今回のイベント情報（毎回入力）:')
+print('  展示会名 / 開催日 / 会場 → これから確認します')
+print()
+print('変更がある場合は教えてください。なければ「OK」と返してください。')
+"
+```
+
+- APIキー未設定 → 対処法を案内して止まる
+- 送信元会社名が未設定 → Step 4 でのオーバーライド入力を案内する
+- それ以外は「変更がある場合は教えてください。なければ「OK」と返してください。」と確認してから Step 1 へ進む
+
+---
 
 ### Step 1: 環境チェック
 
@@ -109,7 +151,8 @@ print('送信元会社名を設定しました:', cfg['sender_company'])
 
 ### Step 6: メール生成
 
-確認した情報を使ってメールを一括生成する。対象ランクも確認する（デフォルト: A,B,C）：
+Step 0 の設定と Step 5 の展示会情報をもとにメールを一括生成する。
+送信元会社名・ランク・CSV パス等は `cli_config.yaml` から自動参照する：
 
 ```bash
 .venv/Scripts/python -c "
@@ -118,15 +161,11 @@ sys.stdout.reconfigure(encoding='utf-8')
 from src.cli_runner import run_generate
 
 result = run_generate(
-    csv_path='data/leads.csv',
-    ranks=['A', 'B', 'C'],
-    sender_company='株式会社XXX',
-    enable_web_search=True,
-    enable_rank_estimation=True,
-    output_path='output/emails.csv',
-    exhibition_name='製造業 DX 展 2026',
-    exhibition_date='2026年4月24日〜26日',
-    exhibition_venue='東京ビッグサイト',
+    # 展示会情報（毎回入力）— Step 5 で確認した値を入力
+    exhibition_name='',   # ← Step 5 で確認した展示会名（空欄可）
+    exhibition_date='',   # ← Step 5 で確認した開催日（空欄可）
+    exhibition_venue='',  # ← Step 5 で確認した会場（空欄可）
+    # sender_company / ranks / csv_path 等は cli_config.yaml から自動参照
 )
 print(result['message'])
 if result['errors'] > 0:
@@ -195,7 +234,7 @@ if result['errors'] > 0:
 
 ### 音声コンテキストを含める
 事前に `/audio-matching` で紐づけと文字起こしを完了させておくこと。
-文字起こしが完了していると `run_generate()` がそれを自動参照する（Streamlit 経由の場合のみ。CLI 経由では手動で `transcript` を渡す必要がある）。
+文字起こしが完了していると `run_generate()` がそれを自動参照する（Skills 版では `transcript` を手動で引数に渡す必要がある）。
 
 ---
 
@@ -204,4 +243,3 @@ if result['errors'] > 0:
 - KB が未構築の状態で generate を実行しない
 - プロジェクトルートから実行すること（相対パスが壊れる）
 - Gmail 下書き機能は `credentials/credentials.json` が必要（詳細は README 参照）
-- Streamlit UI（`app.py`）は起動しない（ユーザーから明示的に求められない限り）

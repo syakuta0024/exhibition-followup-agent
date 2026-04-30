@@ -135,7 +135,7 @@ def run_check() -> Dict[str, Any]:
         items.append({
             "label": "ナレッジベース (KB)",
             "status": "warning",
-            "detail": "未構築 → python cli.py build-kb を実行してください",
+            "detail": "未構築 → /email-workflow の Step 3 でナレッジベース構築を実行してください",
         })
 
     any_error = any(i["status"] == "error" for i in items)
