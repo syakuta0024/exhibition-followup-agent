@@ -134,7 +134,7 @@ class EmailGenerator:
         Parameters
         ----------
         llm_model : str
-            使用するOpenAIモデル名（デフォルト: gpt-4.1-mini）
+            使用するOpenAIモデル名（デフォルト: gpt-5.4-nano）
         temperature : float
             生成温度（デフォルト: 0.7 ── 自然な文体のため）
         """

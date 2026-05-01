@@ -425,9 +425,9 @@ def run_draft_to_gmail(
         df = pd.read_csv(path, encoding="utf-8-sig")
         results = df.to_dict(orient="records")
         for r in results:
-            r.setdefault("email_to", r.get("email_to", ""))
-            r.setdefault("subject", r.get("subject", ""))
-            r.setdefault("body", r.get("body", ""))
+            r.setdefault("email_to", "")
+            r.setdefault("subject", "")
+            r.setdefault("body", "")
 
     try:
         drafter = GmailDrafter(
