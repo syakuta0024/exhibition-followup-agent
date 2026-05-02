@@ -136,16 +136,41 @@ def run_check() -> Dict[str, Any]:
             "detail": f"{crm_dir}/ が見つかりません",
         })
 
-    # 7. ナレッジベース（ChromaDB）— SQLite3 ファイルの存在で判定
+    # 7. ナレッジベース（ChromaDB）— SQLite3 存在確認 + 実チャンク数確認
     chroma_sqlite = Path(Config.CHROMA_DB_DIR) / "chroma.sqlite3"
-    if chroma_sqlite.exists() and chroma_sqlite.stat().st_size > 1000:
-        items.append({"label": "ナレッジベース (KB)", "status": "ok", "detail": "構築済み"})
-    else:
+    if not chroma_sqlite.exists() or chroma_sqlite.stat().st_size <= 1000:
         items.append({
             "label": "ナレッジベース (KB)",
             "status": "warning",
             "detail": "未構築 → /email-workflow の Step 3 でナレッジベース構築を実行してください",
         })
+    else:
+        try:
+            import chromadb as _chromadb
+            _client = _chromadb.PersistentClient(path=str(Config.CHROMA_DB_DIR))
+            try:
+                _col = _client.get_collection(Config.CHROMA_COLLECTION_NAME)
+                chunk_count = _col.count()
+            except Exception:
+                chunk_count = 0
+            if chunk_count > 0:
+                items.append({
+                    "label": "ナレッジベース (KB)",
+                    "status": "ok",
+                    "detail": f"構築済み（{chunk_count}件のチャンク）",
+                })
+            else:
+                items.append({
+                    "label": "ナレッジベース (KB)",
+                    "status": "warning",
+                    "detail": "KBファイルはあるが空です。/email-workflow Step 3 で再構築してください",
+                })
+        except Exception:
+            items.append({
+                "label": "ナレッジベース (KB)",
+                "status": "ok",
+                "detail": "構築済み（チャンク数確認不可）",
+            })
 
     # 8. Gmail credentials
     creds_path = Path("credentials/credentials.json")
