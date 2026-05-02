@@ -155,6 +155,7 @@ class EmailGenerator:
         exhibition_info: Optional[Dict[str, str]] = None,
         web_context: str = "",
         sender_company: str = "",
+        sender_name: str = "",
         audio_context: str = "",
     ) -> Dict[str, str]:
         """
@@ -186,7 +187,7 @@ class EmailGenerator:
         )
 
         # プロンプト組み立て
-        system_prompt = self._build_system_prompt(sender_company=sender_company)
+        system_prompt = self._build_system_prompt(sender_company=sender_company, sender_name=sender_name)
         human_prompt = self._build_human_prompt(
             lead, policy, tech_context, crm_context, crm_structured, exhibition_info,
             web_context, audio_context
@@ -210,18 +211,32 @@ class EmailGenerator:
         logger.info(f"  → 生成完了: 件名「{result['subject']}」")
         return result
 
-    def _build_system_prompt(self, sender_company: str = "") -> str:
+    def _build_system_prompt(self, sender_company: str = "", sender_name: str = "") -> str:
         """システムプロンプトを返す"""
         company = sender_company or "弊社"
+        if sender_name:
+            name_instruction = (
+                f"メールの名乗り（「お世話になっております。{company} 営業部の{sender_name}でございます」等）"
+                f"と署名には必ず「{sender_name}」を使用してください。"
+                "架空の名前や「●●」などのプレースホルダーを使わないでください。"
+            )
+            signature = f"{company} 営業部\n{sender_name}"
+        else:
+            name_instruction = (
+                "メールの名乗りと署名には必ず「●●」とプレースホルダーを使用してください。"
+                "架空の名前や具体的な人名を絶対に生成しないでください。"
+            )
+            signature = f"{company} 営業部\n●●"
         return (
-            f"あなたは{company}の営業担当者です。"
+            f"あなたは{company}の営業担当者です。\n"
+            f"{name_instruction}\n\n"
             "展示会にご来場いただいたお客様に対して、丁寧かつ効果的なフォローアップメールを"
             "日本語ビジネスメール形式で作成してください。\n\n"
             "自社の製品・サービス情報は提供されるコンテキスト（技術資料・過去商談記録）を参照し、"
             "実際に提供できる内容のみをメールに含めてください。\n\n"
             "署名は以下を使用してください:\n"
             "---\n"
-            f"{company} 営業部\n"
+            f"{signature}\n"
             "---"
         )
 

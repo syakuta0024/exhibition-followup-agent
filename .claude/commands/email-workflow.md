@@ -25,6 +25,12 @@ if sender:
 else:
     print('■ 送信元会社名: 未設定 → 入力してください')
 
+sender_name = cfg.get('sender_name', '')
+if sender_name:
+    print(f'■ 送信元担当者: {sender_name}（保存済み）')
+else:
+    print('■ 送信元担当者: 未設定 → /email-workflow 内で設定してください（未設定の場合「●●」になります）')
+
 leads_path = cfg.get('leads_csv_path', 'data/leads.csv')
 label = 'カスタム' if leads_path != 'data/leads.csv' else 'デフォルト'
 print(f'■ リードCSV:    {leads_path}（{label}）')

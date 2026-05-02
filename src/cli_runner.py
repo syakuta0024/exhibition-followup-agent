@@ -13,6 +13,7 @@ import yaml
 CONFIG_PATH = Path("cli_config.yaml")
 DEFAULT_CONFIG: Dict[str, Any] = {
     "sender_company": "",
+    "sender_name": "",
     "default_ranks": ["A", "B", "C"],
     "enable_web_search": True,
     "enable_rank_estimation": True,
@@ -301,6 +302,7 @@ def run_generate(
     csv_path: Optional[str] = None,
     ranks: Optional[List[str]] = None,
     sender_company: Optional[str] = None,
+    sender_name: Optional[str] = None,
     enable_web_search: Optional[bool] = None,
     enable_rank_estimation: Optional[bool] = None,
     output_path: Optional[str] = None,
@@ -338,6 +340,7 @@ def run_generate(
 
     # CLI 引数を優先し、未指定は cli_config.yaml で補完
     _sender = sender_company if sender_company is not None else config.get("sender_company", "")
+    _sender_name = sender_name if sender_name is not None else config.get("sender_name", "")
     _web = enable_web_search if enable_web_search is not None else config.get("enable_web_search", True)
     _rank_est = enable_rank_estimation if enable_rank_estimation is not None else config.get("enable_rank_estimation", True)
     _output = output_path or config.get("output_path", "output/emails.csv")
@@ -386,6 +389,7 @@ def run_generate(
             result = agent.process_lead(
                 lead=lead,
                 sender_company=_sender,
+                sender_name=_sender_name,
                 enable_web_search=_web,
                 enable_rank_estimation=_rank_est,
                 exhibition_info=exhibition_info,
