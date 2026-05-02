@@ -197,7 +197,7 @@ def run_check() -> Dict[str, Any]:
         items.append({
             "label": "Gmail credentials",
             "status": "warning",
-            "detail": "credentials.json 未配置のため Gmail下書き機能は利用できません。配置方法は README を参照してください",
+            "detail": "credentials/credentials.json を Google Cloud Console からダウンロードして配置してください。詳細は system_overview.md の「6-5. Gmail API」セクションを参照",
         })
 
     any_error = any(i["status"] == "error" for i in items)
