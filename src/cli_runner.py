@@ -110,13 +110,26 @@ def run_check() -> Dict[str, Any]:
     tech_dir = Path(Config.TECH_DOCS_DIR)
     if tech_dir.exists():
         md_files = list(tech_dir.glob("*.md"))
+        pdf_files = list(tech_dir.glob("*.pdf"))
         if md_files:
             items.append({"label": "技術資料", "status": "ok", "detail": f"{len(md_files)} 件の Markdown"})
+        elif pdf_files:
+            items.append({
+                "label": "技術資料",
+                "status": "warning",
+                "detail": (
+                    f".pdf ファイルが {len(pdf_files)} 件あります（直接読み込めません）。"
+                    "Markdown に変換して配置してください（例: tech_doc_DigiMA.pdf → DigiMA.md）"
+                ),
+            })
         else:
             items.append({
                 "label": "技術資料",
                 "status": "warning",
-                "detail": f"{tech_dir}/ に Markdown ファイルがありません",
+                "detail": (
+                    f"{tech_dir}/ が空です。"
+                    "自社の製品技術資料を .md 形式で配置してください。メール生成の品質が向上します"
+                ),
             })
     else:
         items.append({
