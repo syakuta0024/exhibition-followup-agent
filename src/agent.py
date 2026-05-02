@@ -53,6 +53,7 @@ class FollowUpAgent:
         enable_web_search: bool = True,
         enable_rank_estimation: bool = True,
         sender_company: str = "",
+        sender_name: str = "",
         transcript: str = "",
         extracted_needs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -222,6 +223,7 @@ class FollowUpAgent:
             exhibition_info=exhibition_info,
             web_context=web_info.get("summary", ""),
             sender_company=sender_company,
+            sender_name=sender_name,
             audio_context=audio_context,
         )
         _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
