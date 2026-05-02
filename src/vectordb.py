@@ -160,6 +160,9 @@ class VectorDBManager:
         技術資料とCRM記録を読み込み、ベクトルインデックスを構築する。
         BM25用コーパスも同時に構築する。
 
+        既存インデックスの削除はMarkdownファイルとチャンクの存在が確認された後にのみ
+        実行される。ファイルが0件の場合は既存KBを保護して ValueError を raise する。
+
         Parameters
         ----------
         tech_docs_dir : str
@@ -169,45 +172,25 @@ class VectorDBManager:
         """
         print("インデックス構築を開始します...")
 
-        # アップロード済みPDFチャンクを退避（build_index後に復元）
-        pdf_saved: Dict[str, Any] = {
-            "ids": [], "embeddings": [], "documents": [], "metadatas": []
-        }
-        if self.is_index_built():
-            pdf_saved = self._get_pdf_chunks()
-            pdf_count = len(pdf_saved.get("ids", []))
-            if pdf_count > 0:
-                print(f"  アップロード済みPDFチャンク: {pdf_count}件を退避")
-            print("既存インデックスをクリアします...")
-            self.clear_index()
-            self.vectorstore = self._load_vectorstore()
-
-        # PDF親チャンクエントリを再構築後に復元するため退避
-        pdf_parent_ids: set = set()
-        for meta in pdf_saved.get("metadatas", []):
-            pid = meta.get("parent_id")
-            if pid:
-                pdf_parent_ids.add(pid)
-        pdf_parent_entries = {k: v for k, v in self._parent_store.items() if k in pdf_parent_ids}
-
-        # 技術資料の読み込み（強化メタデータ付き）
+        # ① 先にMarkdownファイルを読み込む（既存KBに触る前に）
         tech_docs = self._load_markdown_files(tech_docs_dir, source_type="tech_doc")
         print(f"  技術資料: {len(tech_docs)} ファイル読み込み完了")
 
-        # CRM記録の読み込み（強化メタデータ付き）
         crm_docs = self._load_markdown_files(crm_records_dir, source_type="crm_record")
         print(f"  CRM記録: {len(crm_docs)} ファイル読み込み完了")
 
         all_raw_docs = tech_docs + crm_docs
 
-        # BM25コーパスを構築（ファイル単位で保持）
-        self._bm25_corpus = [
-            {"text": doc["text"], "metadata": doc["metadata"]}
-            for doc in all_raw_docs
-        ]
+        # ② ファイルが0件なら既存KBを保護して早期return
+        if not all_raw_docs:
+            raise ValueError(
+                "Markdownファイルが見つかりません。"
+                f"{tech_docs_dir}/ または {crm_records_dir}/ に "
+                ".md ファイルを配置してから再実行してください。"
+            )
 
-        # 親子チャンク構造で分割（Contextual Retrieval プレフィックスは子チャンクに付加）
-        self._parent_store = {}
+        # ③ 親子チャンクを事前生成（コレクション削除前に完成させる）
+        parent_store_new: Dict[str, str] = {}
         all_chunks: List[Document] = []
 
         for raw_doc in all_raw_docs:
@@ -215,16 +198,14 @@ class VectorDBManager:
             source_type = raw_doc["metadata"].get("source_type", "tech_doc")
             p_splitter, c_splitter = self._get_splitters_for_doc_type(source_type)
 
-            # ① 親チャンクを生成してストアに保存
             parent_chunks = p_splitter.create_documents(
                 texts=[raw_doc["text"]],
                 metadatas=[raw_doc["metadata"]],
             )
             for p_idx, parent_chunk in enumerate(parent_chunks):
                 parent_id = f"{raw_doc['metadata'].get('source_file', 'unknown')}_parent_{p_idx}"
-                self._parent_store[parent_id] = parent_chunk.page_content
+                parent_store_new[parent_id] = parent_chunk.page_content
 
-                # ② 親チャンクから子チャンクを生成（DBに格納するのは子チャンクのみ）
                 child_chunks = c_splitter.create_documents(
                     texts=[parent_chunk.page_content],
                     metadatas=[{
@@ -233,15 +214,48 @@ class VectorDBManager:
                         "chunk_type": "child",
                     }],
                 )
-                # ③ Contextual Retrieval プレフィックスを付加
                 for child in child_chunks:
                     context_prefix = _build_context_prefix(first_line, source_type, child.metadata)
                     child.page_content = context_prefix + child.page_content
                 all_chunks.extend(child_chunks)
 
-        print(f"  Markdownチャンク: 子={len(all_chunks)}件 / 親={len(self._parent_store)}件")
+        print(f"  Markdownチャンク: 子={len(all_chunks)}件 / 親={len(parent_store_new)}件")
 
-        # 子チャンクのみをChromaDBに格納
+        # ④ チャンクが0件なら早期return（既存KBは保護）
+        if not all_chunks:
+            raise ValueError(
+                "Markdownファイルは存在しますが、チャンクが0件になりました。"
+                "ファイルの内容を確認してください。"
+            )
+
+        # ⑤ ここまで来て初めて既存コレクションを削除する
+        pdf_saved: Dict[str, Any] = {
+            "ids": [], "embeddings": [], "documents": [], "metadatas": []
+        }
+        pdf_parent_entries: Dict[str, str] = {}
+        if self.is_index_built():
+            pdf_saved = self._get_pdf_chunks()
+            pdf_count = len(pdf_saved.get("ids", []))
+            if pdf_count > 0:
+                print(f"  アップロード済みPDFチャンク: {pdf_count}件を退避")
+            # PDF親チャンクエントリを退避
+            pdf_parent_ids: set = set()
+            for meta in pdf_saved.get("metadatas", []):
+                pid = meta.get("parent_id")
+                if pid:
+                    pdf_parent_ids.add(pid)
+            pdf_parent_entries = {k: v for k, v in self._parent_store.items() if k in pdf_parent_ids}
+            print("既存インデックスをクリアします...")
+            self.clear_index()
+            self.vectorstore = self._load_vectorstore()
+
+        # ⑥ 新コレクションにチャンクを追加
+        self._parent_store = parent_store_new
+        self._bm25_corpus = [
+            {"text": doc["text"], "metadata": doc["metadata"]}
+            for doc in all_raw_docs
+        ]
+
         self.vectorstore.add_documents(all_chunks)
 
         # 退避したPDFチャンクを再投入（再Embedding不要 / コスト0）
@@ -252,7 +266,6 @@ class VectorDBManager:
                 documents=pdf_saved["documents"],
                 metadatas=pdf_saved["metadatas"],
             )
-            # BM25コーパスにもPDFチャンクを追加
             for text, meta in zip(pdf_saved["documents"], pdf_saved["metadatas"]):
                 self._bm25_corpus.append({"text": text, "metadata": meta})
             print(f"  アップロード済みPDFチャンク: {len(pdf_saved['ids'])}件を復元")
