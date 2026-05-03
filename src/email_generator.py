@@ -97,7 +97,11 @@ RANK_POLICY: Dict[str, Dict[str, str]] = {
 # 出力フォーマットの指定（LLMへの指示）
 # 【CTA】は「メール本文内のCTA」ではなく「営業担当向けの内部アクション指示」
 # ---------------------------------------------------------------
-OUTPUT_FORMAT_INSTRUCTION = """
+def _build_output_format_instruction(sender_company: str = "", sender_name: str = "") -> str:
+    """出力フォーマット指示を組み立てる（sender_company / sender_name を展開して LLM に渡す）"""
+    company = sender_company or "弊社"
+    name = sender_name or "●●"
+    return f"""
 以下のフォーマットで厳密に出力してください。
 
 【件名】
@@ -106,13 +110,15 @@ OUTPUT_FORMAT_INSTRUCTION = """
 【本文】
 （完全なメール文面。以下の構成で書くこと：
 1. 宛名（会社名・部署・役職・氏名 様）
-2. 挨拶（お世話になっております。{会社名} 営業部の●●でございます。）
+2. 挨拶（お世話になっております。{company} 営業部の{name}でございます。）
+   ※ 送信元は必ず「{company}」です。顧客の会社名を送信元として使わないこと。
 3. 展示会来場のお礼
 4. 展示会での会話の振り返り（確度A/Bの場合のみ）
 5. 製品情報・提案（確度に応じて深さを変える）
 6. 次のアクション提案（確度に応じて）
 7. 締めの挨拶
-8. 署名）
+8. 署名
+※ 上記の番号（1〜8）は構成ガイドです。本文には番号を出力しないでください。）
 
 【CTA】
 （営業担当者が次にとるべき社内向けアクション指示を1〜2文で記載。
@@ -190,7 +196,8 @@ class EmailGenerator:
         system_prompt = self._build_system_prompt(sender_company=sender_company, sender_name=sender_name)
         human_prompt = self._build_human_prompt(
             lead, policy, tech_context, crm_context, crm_structured, exhibition_info,
-            web_context, audio_context
+            web_context, audio_context,
+            sender_company=sender_company, sender_name=sender_name,
         )
 
         # LLM呼び出し
@@ -250,6 +257,8 @@ class EmailGenerator:
         exhibition_info: Optional[Dict[str, str]] = None,
         web_context: str = "",
         audio_context: str = "",
+        sender_company: str = "",
+        sender_name: str = "",
     ) -> str:
         """
         ユーザープロンプトを組み立てる。
@@ -359,7 +368,7 @@ class EmailGenerator:
 - トーン: {policy['tone']}
 - 指示: {policy['instruction']}
 
-{OUTPUT_FORMAT_INSTRUCTION}"""
+{_build_output_format_instruction(sender_company, sender_name)}"""
 
         return prompt
 
