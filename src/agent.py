@@ -56,6 +56,7 @@ class FollowUpAgent:
         sender_name: str = "",
         transcript: str = "",
         extracted_needs: Optional[Dict[str, Any]] = None,
+        product_urls: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -225,6 +226,7 @@ class FollowUpAgent:
             sender_company=sender_company,
             sender_name=sender_name,
             audio_context=audio_context,
+            product_urls=product_urls,
         )
         _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
         _step(7, "完了", "done", "メール生成が完了しました")

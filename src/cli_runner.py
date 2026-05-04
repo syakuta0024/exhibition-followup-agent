@@ -353,6 +353,7 @@ def run_generate(
     _rank_est = enable_rank_estimation if enable_rank_estimation is not None else config.get("enable_rank_estimation", True)
     _output = output_path or config.get("output_path", "output/emails.csv")
     _ranks = ranks or config.get("default_ranks", ["A", "B", "C"])
+    _product_urls = config.get("product_urls", {})
 
     exhibition_info = {
         "exhibition_name": exhibition_name or "",
@@ -401,6 +402,7 @@ def run_generate(
                 enable_web_search=_web,
                 enable_rank_estimation=_rank_est,
                 exhibition_info=exhibition_info,
+                product_urls=_product_urls,
             )
             results.append(result)
         except Exception as e:
