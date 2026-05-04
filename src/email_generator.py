@@ -97,10 +97,29 @@ RANK_POLICY: Dict[str, Dict[str, str]] = {
 # 出力フォーマットの指定（LLMへの指示）
 # 【CTA】は「メール本文内のCTA」ではなく「営業担当向けの内部アクション指示」
 # ---------------------------------------------------------------
-def _build_output_format_instruction(sender_company: str = "", sender_name: str = "") -> str:
-    """出力フォーマット指示を組み立てる（sender_company / sender_name を展開して LLM に渡す）"""
+def _build_output_format_instruction(
+    sender_company: str = "",
+    sender_name: str = "",
+    product_urls: Optional[Dict[str, str]] = None,
+) -> str:
+    """出力フォーマット指示を組み立てる（sender_company / sender_name / product_urls を展開して LLM に渡す）"""
     company = sender_company or "弊社"
     name = sender_name or "●●"
+
+    configured_urls = {k: v for k, v in (product_urls or {}).items() if v.strip()}
+    if configured_urls:
+        url_lines = "\n".join(f"  - {k}: {v}" for k, v in configured_urls.items())
+        url_rule = (
+            f"※ 本文にURLを記載する場合は、以下の設定済みURLのみを使用してください:\n"
+            f"{url_lines}\n"
+            "  上記以外のURL（推測URL・example.com等のサンプルドメイン）は絶対に使用しないでください。"
+        )
+    else:
+        url_rule = (
+            "※ 本文にURLを含めないでください。\n"
+            "  製品URLは未設定です。推測URL・example.com・example.org等のサンプルドメインも絶対に使用しないでください。"
+        )
+
     return f"""
 以下のフォーマットで厳密に出力してください。
 
@@ -119,7 +138,8 @@ def _build_output_format_instruction(sender_company: str = "", sender_name: str 
 7. 締めの挨拶
 8. 署名
 ※ 上記の番号（1〜8）は構成ガイドです。本文には番号を出力しないでください。
-※ 件名・本文に「L001」「L007」のような内部管理コード・参照IDを含めないでください。）
+※ 件名・本文に「L001」「L007」のような内部管理コード・参照IDを含めないでください。
+{url_rule}）
 
 【CTA】
 （営業担当者が次にとるべき社内向けアクション指示を1〜2文で記載。
@@ -164,6 +184,7 @@ class EmailGenerator:
         sender_company: str = "",
         sender_name: str = "",
         audio_context: str = "",
+        product_urls: Optional[Dict[str, str]] = None,
     ) -> Dict[str, str]:
         """
         フォローアップメールを生成する。
@@ -199,6 +220,7 @@ class EmailGenerator:
             lead, policy, tech_context, crm_context, crm_structured, exhibition_info,
             web_context, audio_context,
             sender_company=sender_company, sender_name=sender_name,
+            product_urls=product_urls,
         )
 
         # LLM呼び出し
@@ -261,6 +283,7 @@ class EmailGenerator:
         audio_context: str = "",
         sender_company: str = "",
         sender_name: str = "",
+        product_urls: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         ユーザープロンプトを組み立てる。
@@ -370,7 +393,7 @@ class EmailGenerator:
 - トーン: {policy['tone']}
 - 指示: {policy['instruction']}
 
-{_build_output_format_instruction(sender_company, sender_name)}"""
+{_build_output_format_instruction(sender_company, sender_name, product_urls)}"""
 
         return prompt
 
