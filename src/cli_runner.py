@@ -19,6 +19,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_rank_estimation": True,
     "output_path": "output/emails.csv",
     "leads_csv_path": "data/leads.csv",
+    "product_urls": {
+        "EdgeGuard": "",
+        "DigiMA": "",
+        "Sorani": "",
+        "FactoryBrain": "",
+        "NTX-OCR": "",
+        "SmartVision": "",
+    },
 }
 
 
