@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from rapidfuzz import fuzz
 
+from src.config import Config
 from src.utils import setup_logger
 
 logger = setup_logger(__name__)
@@ -91,7 +92,7 @@ class AudioMatcher:
         leads_df: pd.DataFrame,
         rep_col: Optional[str] = None,
         timestamp_col: Optional[str] = None,
-        tolerance_minutes: int = 10,
+        tolerance_minutes: int = Config.AUDIO_TIMESTAMP_TOLERANCE_MINUTES,
     ) -> List[MatchResult]:
         """
         音声ファイルリストをリードDataFrameに紐づける。
