@@ -17,8 +17,19 @@ import pandas as pd
 from src.utils import setup_logger, parse_interested_products, check_lead_quality
 from src.web_searcher import WebSearcher
 from src.rank_estimator import RankEstimator
+from src.date_validator import format_for_llm_prompt
 
 logger = setup_logger(__name__)
+
+
+def should_include_schedule(lead_rank: str, policy: str) -> bool:
+    if policy == "none":
+        return False
+    if policy == "all":
+        return True
+    if policy == "ab_only":
+        return lead_rank in ("A", "B")
+    return False
 
 
 class FollowUpAgent:
@@ -57,6 +68,8 @@ class FollowUpAgent:
         transcript: str = "",
         extracted_needs: Optional[Dict[str, Any]] = None,
         product_urls: Optional[Dict[str, str]] = None,
+        candidate_dates: Optional[List[Dict]] = None,
+        schedule_policy: str = "ab_only",
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -216,6 +229,9 @@ class FollowUpAgent:
         # ── Step 6: メール生成 ──────────────────────────────────
         _step(6, "メール生成中", "running", "LLMがメール文を生成中...")
         audio_context = _build_audio_context(transcript, extracted_needs)
+        schedule_context = ""
+        if candidate_dates and should_include_schedule(lead.get("lead_rank", ""), schedule_policy):
+            schedule_context = format_for_llm_prompt(candidate_dates)
         email = self.email_gen.generate(
             lead=lead,
             tech_context=tech_context,
@@ -227,6 +243,7 @@ class FollowUpAgent:
             sender_name=sender_name,
             audio_context=audio_context,
             product_urls=product_urls,
+            schedule_context=schedule_context,
         )
         _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
         _step(7, "完了", "done", "メール生成が完了しました")

@@ -185,6 +185,7 @@ class EmailGenerator:
         sender_name: str = "",
         audio_context: str = "",
         product_urls: Optional[Dict[str, str]] = None,
+        schedule_context: str = "",
     ) -> Dict[str, str]:
         """
         フォローアップメールを生成する。
@@ -221,6 +222,7 @@ class EmailGenerator:
             web_context, audio_context,
             sender_company=sender_company, sender_name=sender_name,
             product_urls=product_urls,
+            schedule_context=schedule_context,
         )
 
         # LLM呼び出し
@@ -284,6 +286,7 @@ class EmailGenerator:
         sender_company: str = "",
         sender_name: str = "",
         product_urls: Optional[Dict[str, str]] = None,
+        schedule_context: str = "",
     ) -> str:
         """
         ユーザープロンプトを組み立てる。
@@ -367,10 +370,15 @@ class EmailGenerator:
                 f"{audio_context}\n"
             )
 
+        # ── 面談候補日セクション ─────────────────────────────────────
+        schedule_section = ""
+        if schedule_context.strip():
+            schedule_section = f"## 面談候補日\n{schedule_context}\n"
+
         # ── セクション結合 ────────────────────────────────────────
         context_sections = "\n".join(
-            s for s in [audio_section, exhibition_section, extra_section,
-                        crm_section, tech_section, web_section]
+            s for s in [audio_section, exhibition_section, schedule_section,
+                        extra_section, crm_section, tech_section, web_section]
             if s.strip()
         )
         if context_sections:
