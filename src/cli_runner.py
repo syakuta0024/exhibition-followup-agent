@@ -318,6 +318,8 @@ def run_generate(
     exhibition_date: Optional[str] = None,
     exhibition_venue: Optional[str] = None,
     on_progress: Optional[Callable] = None,
+    candidate_dates: Optional[List[Dict]] = None,
+    schedule_policy: str = "ab_only",
 ) -> Dict[str, Any]:
     """
     展示会リードのフォローアップメールを一括生成して CSV に保存する。
@@ -403,6 +405,8 @@ def run_generate(
                 enable_rank_estimation=_rank_est,
                 exhibition_info=exhibition_info,
                 product_urls=_product_urls,
+                candidate_dates=candidate_dates,
+                schedule_policy=schedule_policy,
             )
             results.append(result)
         except Exception as e:
