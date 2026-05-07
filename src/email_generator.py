@@ -139,6 +139,10 @@ def _build_output_format_instruction(
 8. 署名
 ※ 上記の番号（1〜8）は構成ガイドです。本文には番号を出力しないでください。
 ※ 件名・本文に「L001」「L007」のような内部管理コード・参照IDを含めないでください。
+※ メールでは「ご関心製品」欄に記載された製品のみに言及してください。
+  そこに含まれない製品を新たに勧めないでください。
+※ 「ご関心製品」に複数製品がある場合、メール本文では主要1〜2製品に絞って
+  言及してください。3つ以上すべてに触れる必要はありません。
 {url_rule}）
 
 【CTA】
@@ -217,13 +221,18 @@ class EmailGenerator:
 
         # プロンプト組み立て
         system_prompt = self._build_system_prompt(sender_company=sender_company, sender_name=sender_name)
-        human_prompt = self._build_human_prompt(
-            lead, policy, tech_context, crm_context, crm_structured, exhibition_info,
-            web_context, audio_context,
-            sender_company=sender_company, sender_name=sender_name,
-            product_urls=product_urls,
-            schedule_context=schedule_context,
+        _common = dict(
+            lead=lead, policy=policy, tech_context=tech_context, crm_context=crm_context,
+            crm_structured=crm_structured, exhibition_info=exhibition_info,
+            web_context=web_context, audio_context=audio_context,
+            sender_company=sender_company, sender_name=sender_name, product_urls=product_urls,
         )
+        if schedule_context.strip():
+            human_prompt = self._build_human_prompt_with_schedule(
+                **_common, schedule_context=schedule_context
+            )
+        else:
+            human_prompt = self._build_human_prompt_info_only(**_common)
 
         # LLM呼び出し
         try:
@@ -273,36 +282,23 @@ class EmailGenerator:
             "件名・本文に「L001」「L007」のような内部管理IDを含めないでください。"
         )
 
-    def _build_human_prompt(
+    def _assemble_context_sections(
         self,
         lead: Dict[str, Any],
-        policy: Dict[str, str],
         tech_context: str,
         crm_context: str,
-        crm_structured: Optional[Dict[str, Any]] = None,
-        exhibition_info: Optional[Dict[str, str]] = None,
-        web_context: str = "",
-        audio_context: str = "",
-        sender_company: str = "",
-        sender_name: str = "",
-        product_urls: Optional[Dict[str, str]] = None,
+        crm_structured: Optional[Dict[str, Any]],
+        exhibition_info: Optional[Dict[str, str]],
+        web_context: str,
+        audio_context: str,
         schedule_context: str = "",
     ) -> str:
-        """
-        ユーザープロンプトを組み立てる。
-
-        CRM情報の優先順位:
-        1. crm_structured（CRM CSV由来の構造化データ） → 詳細な構造化セクションとして出力
-        2. crm_context（vectordb由来のテキスト） → 従来通りのテキストセクションとして出力
-        """
-        products = parse_interested_products(str(lead.get("interested_products", "")))
-        products_str = "、".join(products) if products else "（未記載）"
+        """共通のコンテキストセクションを組み立てて返す。
+        schedule_context を渡さない呼び出しでは面談候補日は含まれない。"""
 
         # ── CRMセクション: 構造化データ優先 ──────────────────────
         crm_section = ""
-
         if crm_structured and any(v.strip() for v in crm_structured.values() if isinstance(v, str)):
-            # CRM CSV から取得した構造化データ（HubSpot形式）を詳細フォーマットで出力
             match_method = crm_structured.get("match_method", "")
             method_label = "メール一致" if match_method == "email" else "会社名マッチ"
             lines = [f"## 過去のCRM情報（HubSpot連携 / 紐付け: {method_label}）"]
@@ -319,9 +315,7 @@ class EmailGenerator:
             if crm_structured.get("contact_owner"):
                 lines.append(f"- 担当者: {crm_structured['contact_owner']}")
             crm_section = "\n".join(lines) + "\n"
-
         elif crm_context.strip():
-            # vectordb 由来のテキスト形式のCRM情報（後方互換）
             crm_section = f"## 過去のCRM商談履歴（参考）\n{crm_context}\n"
 
         # ── 技術資料セクション ───────────────────────────────────
@@ -333,9 +327,8 @@ class EmailGenerator:
         extra_info_lines = []
         for key, val in lead.items():
             if key.startswith("extra_") and str(val).strip():
-                label = key[len("extra_"):]  # "extra_" プレフィックスを除いた元のカラム名
+                label = key[len("extra_"):]
                 extra_info_lines.append(f"- {label}: {val}")
-
         extra_section = ""
         if extra_info_lines:
             extra_section = "## 追加情報（アンケート・独自項目）\n" + "\n".join(extra_info_lines) + "\n"
@@ -365,26 +358,55 @@ class EmailGenerator:
         audio_section = ""
         if audio_context.strip():
             audio_section = (
-                f"## ★最優先情報（録音音声より）\n"
-                f"※ 以下の情報を最も重視してメールを作成してください。\n"
+                "## ★最優先情報（録音音声より）\n"
+                "※ 以下の情報を最も重視してメールを作成してください。\n"
                 f"{audio_context}\n"
             )
 
-        # ── 面談候補日セクション ─────────────────────────────────────
+        # ── 面談候補日セクション（schedule_context が渡された場合のみ）──
         schedule_section = ""
         if schedule_context.strip():
             schedule_section = f"## 面談候補日\n{schedule_context}\n"
 
-        # ── セクション結合 ────────────────────────────────────────
-        context_sections = "\n".join(
+        joined = "\n".join(
             s for s in [audio_section, exhibition_section, schedule_section,
                         extra_section, crm_section, tech_section, web_section]
             if s.strip()
         )
-        if context_sections:
-            context_sections = "\n" + context_sections
+        return ("\n" + joined) if joined else ""
 
-        prompt = f"""以下のお客様情報をもとにフォローアップメールを作成してください。
+    def _build_human_prompt_with_schedule(
+        self,
+        lead: Dict[str, Any],
+        policy: Dict[str, str],
+        tech_context: str,
+        crm_context: str,
+        crm_structured: Optional[Dict[str, Any]] = None,
+        exhibition_info: Optional[Dict[str, str]] = None,
+        web_context: str = "",
+        audio_context: str = "",
+        sender_company: str = "",
+        sender_name: str = "",
+        product_urls: Optional[Dict[str, str]] = None,
+        schedule_context: str = "",
+    ) -> str:
+        """候補日3つを提示する A/B 向けプロンプト構築。"""
+        products = parse_interested_products(str(lead.get("interested_products", "")))
+        products_str = "、".join(products) if products else "（未記載）"
+        context_sections = self._assemble_context_sections(
+            lead, tech_context, crm_context, crm_structured, exhibition_info,
+            web_context, audio_context, schedule_context=schedule_context,
+        )
+        schedule_structure = (
+            "\n## メール構成（この顧客は候補日提示型として扱う）\n"
+            "1. お礼挨拶\n"
+            "2. 当日の会話に触れる（memo から引用）\n"
+            "3. 関心製品（主要1〜2）の具体的な提案\n"
+            "4. 「以下の候補日のいずれかでお打ち合わせいかがでしょうか」と提示\n"
+            "5. ## 面談候補日 セクションの3候補をそのまま組み込む（日付・曜日・時間帯）\n"
+            "※ 番号は構成ガイドです。本文には番号を出力しないでください。\n"
+        )
+        return f"""以下のお客様情報をもとにフォローアップメールを作成してください。
 
 ## お客様情報
 - 氏名: {lead.get('visitor_name', '')} 様
@@ -400,10 +422,58 @@ class EmailGenerator:
 - ランク: {lead.get('lead_rank', 'C')} ({policy['label']})
 - トーン: {policy['tone']}
 - 指示: {policy['instruction']}
-
+{schedule_structure}
 {_build_output_format_instruction(sender_company, sender_name, product_urls)}"""
 
-        return prompt
+    def _build_human_prompt_info_only(
+        self,
+        lead: Dict[str, Any],
+        policy: Dict[str, str],
+        tech_context: str,
+        crm_context: str,
+        crm_structured: Optional[Dict[str, Any]] = None,
+        exhibition_info: Optional[Dict[str, str]] = None,
+        web_context: str = "",
+        audio_context: str = "",
+        sender_company: str = "",
+        sender_name: str = "",
+        product_urls: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """候補日提示なし・情報提供型（C/D/E）向けプロンプト構築。"""
+        products = parse_interested_products(str(lead.get("interested_products", "")))
+        products_str = "、".join(products) if products else "（未記載）"
+        # schedule_context を渡さない → schedule_section は空
+        context_sections = self._assemble_context_sections(
+            lead, tech_context, crm_context, crm_structured, exhibition_info,
+            web_context, audio_context,
+        )
+        info_structure = (
+            "\n## メール構成（この顧客は情報提供型として扱う）\n"
+            "1. お礼挨拶\n"
+            "2. 当日の会話に触れる（memo から引用）\n"
+            "3. 関心製品（主要1〜2）の簡単な情報提供\n"
+            "4. 「ご興味があればお気軽にお問い合わせください」のような押し付けない結び\n"
+            "5. 候補日は提示しない（候補日提示型ではない）\n"
+            "※ 番号は構成ガイドです。本文には番号を出力しないでください。\n"
+        )
+        return f"""以下のお客様情報をもとにフォローアップメールを作成してください。
+
+## お客様情報
+- 氏名: {lead.get('visitor_name', '')} 様
+- 会社名: {lead.get('company_name', '')}
+- 部署・役職: {lead.get('department', '')} / {lead.get('job_title', '')}
+- メールアドレス: {lead.get('email', '')}
+- 来場日: {lead.get('visit_date', '')}
+- ご関心製品: {products_str}
+- 今後のご要望: {lead.get('future_requests', '（なし）')}
+- 展示会での会話メモ: {lead.get('memo', '（なし）')}
+{context_sections}
+## メール作成方針
+- ランク: {lead.get('lead_rank', 'C')} ({policy['label']})
+- トーン: {policy['tone']}
+- 指示: {policy['instruction']}
+{info_structure}
+{_build_output_format_instruction(sender_company, sender_name, product_urls)}"""
 
     def _parse_llm_response(self, response: str) -> Dict[str, str]:
         """
