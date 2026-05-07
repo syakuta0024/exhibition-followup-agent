@@ -174,10 +174,100 @@ print('送信元会社名を設定しました:', cfg['sender_company'])
 
 ---
 
+### Step 5.5: 対象ランクと候補日の収集
+
+#### 質問1: メール送信対象のランク
+
+以下の選択肢を提示し、選んでもらう:
+
+| 選択肢 | ランク | target_ranks の値 |
+|---|---|---|
+| A) A・B・Cランク全員（デフォルト） | A / B / C | ["A", "B", "C"] |
+| B) A・Bランクのみ（ホットリードのみ） | A / B | ["A", "B"] |
+| C) Aランクのみ | A | ["A"] |
+| D) 全ランク（D・Eも含む） | A〜E | ["A", "B", "C", "D", "E"] |
+| E) カスタム指定（例: "A,C"） | 任意 | ユーザー入力をカンマ分割 |
+
+→ `target_ranks: List[str]` として確定する
+
+#### 質問2: 候補日提示ポリシー
+
+以下を提示して選んでもらう:
+
+| 選択肢 | 内容 | schedule_policy の値 |
+|---|---|---|
+| A) A/Bのみ候補日提示、Cは情報提供型（業界推奨） | ホットリードに絞る | "ab_only" |
+| B) 全ランクで候補日を提示 | 全員に日程提案 | "all" |
+| C) 全ランクで候補日を提示しない | 日程提案なし | "none" |
+
+→ `schedule_policy: str` として確定する
+
+`"none"` を選んだ場合は **質問3をスキップして Step 6 へ進む**（`candidate_dates = None`）。
+
+#### 質問3: 候補日の入力（Q2 が "all" または "ab_only" の場合のみ）
+
+以下のフォーマットで候補日を入力してもらう（改行区切り、時間帯はカンマ区切り）:
+
+```
+2026/5/8 10:00-12:00, 14:00-17:00
+2026/5/12 9:00-12:00
+2026/5/13 13:00-17:00
+```
+
+入力を受けたら以下のコードで検証する:
+
+```bash
+.venv/Scripts/python -c "
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+from src.cli_runner import validate_candidate_dates
+
+user_input = '''2026/5/8 10:00-12:00, 14:00-17:00
+2026/5/12 9:00-12:00
+2026/5/13 13:00-17:00'''  # ← ユーザー入力に置き換える
+
+result = validate_candidate_dates(user_input)
+print('is_valid:', result['is_valid'])
+if result['errors']:
+    for e in result['errors']:
+        print('エラー:', e)
+else:
+    print('件数:', len(result['parsed']))
+"
+```
+
+**検証結果の処理**:
+
+| 結果 | 対応 |
+|---|---|
+| `is_valid = True` | `result["parsed"]` を `candidate_dates` として確定し、Step 6 へ進む |
+| `is_valid = False` | エラー内容を表示し、**3つすべてを再入力**してもらう（部分修正不可） |
+
+**エラー時の案内文（必ず以下の形式で伝える）**:
+
+```
+以下のエラーがありました:
+  ・（result["errors"] の内容）
+
+候補日を3つすべて入力し直してください。
+書式例: 2026/5/8 10:00-12:00, 14:00-17:00
+※ 過去の日付が1件でも含まれると全部やり直しになります。
+```
+
+#### Step 5.5 完了時の確定変数
+
+| 変数 | 型 | 値の例 |
+|---|---|---|
+| `target_ranks` | `List[str]` | `["A", "B", "C"]` |
+| `schedule_policy` | `str` | `"ab_only"` |
+| `candidate_dates` | `List[Dict]` または `None` | `[{"date": "2026/5/8", "time_slots": ["10:00-12:00"]}]` |
+
+---
+
 ### Step 6: メール生成
 
-Step 0 の設定と Step 5 の展示会情報をもとにメールを一括生成する。
-送信元会社名・ランク・CSV パス等は `cli_config.yaml` から自動参照する：
+Step 0 の設定、Step 5 の展示会情報、Step 5.5 の収集値をもとにメールを一括生成する。
+送信元会社名・CSV パス等は `cli_config.yaml` から自動参照する：
 
 ```bash
 .venv/Scripts/python -c "
@@ -190,7 +280,11 @@ result = run_generate(
     exhibition_name='',   # ← Step 5 で確認した展示会名（空欄可）
     exhibition_date='',   # ← Step 5 で確認した開催日（空欄可）
     exhibition_venue='',  # ← Step 5 で確認した会場（空欄可）
-    # sender_company / ranks / csv_path 等は cli_config.yaml から自動参照
+    # Step 5.5 で収集した値
+    ranks=[],             # ← Step 5.5 の target_ranks（例: ['A', 'B', 'C']）
+    schedule_policy='',   # ← Step 5.5 のポリシー（例: 'ab_only'）
+    candidate_dates=[],   # ← Step 5.5 の候補日リスト（"none" 時は None）
+    # sender_company / csv_path 等は cli_config.yaml から自動参照
 )
 print(result['message'])
 if result['errors'] > 0:

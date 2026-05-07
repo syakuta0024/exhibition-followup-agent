@@ -437,6 +437,30 @@ def run_generate(
     }
 
 
+def validate_candidate_dates(input_str: str) -> Dict[str, Any]:
+    """
+    候補日入力文字列を検証・パースして単一エントリで返す（Skill 用）。
+
+    Returns
+    -------
+    dict
+        is_valid (bool), errors (list[str]), parsed (list[dict])
+    """
+    from src.date_validator import parse_candidate_dates, validate_dates
+
+    try:
+        parsed = parse_candidate_dates(input_str)
+    except ValueError as e:
+        return {"is_valid": False, "errors": [str(e)], "parsed": []}
+
+    result = validate_dates(parsed)
+    return {
+        "is_valid": result.is_valid,
+        "errors": result.errors,
+        "parsed": parsed if result.is_valid else [],
+    }
+
+
 def run_draft_to_gmail(
     results: Optional[List[Dict]] = None,
     output_csv_path: Optional[str] = None,
