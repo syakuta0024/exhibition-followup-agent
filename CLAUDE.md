@@ -242,7 +242,7 @@ EST_SECONDS_PER_LEAD_WEB    = 3.0   # Web検索追加分の推定秒数/件
 WHISPER_MODEL: str = "whisper-1"
 WHISPER_PRICE_PER_MIN: float = 0.006          # $/分
 WHISPER_MAX_FILE_MB: int = 25                 # Whisper API上限
-AUDIO_TIMESTAMP_TOLERANCE_MINUTES: int = 10  # タイムスタンプ許容誤差（分）
+AUDIO_TIMESTAMP_TOLERANCE_MINUTES: int = 5   # タイムスタンプ許容誤差（分）
 AUDIO_RED_FLAG_WARNING_THRESHOLD: float = 0.30  # 赤フラグ率の警告閾値
 ```
 
