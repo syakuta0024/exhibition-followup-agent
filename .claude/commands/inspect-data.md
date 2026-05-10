@@ -40,12 +40,14 @@ print('REQUIRED:')
 for std, orig in mapping.items():
     if std in Config.REQUIRED_FIELDS:
         status = '[OK]' if orig else '[NG]'
-        print(f'  {status} {std} <- {orig}')
+        label = Config.get_field_label(std)
+        print(f'  {status} {label}({std}) <- {orig}')
 print('OPTIONAL:')
 for std, orig in mapping.items():
     if std in Config.OPTIONAL_FIELDS:
         status = '[OK]' if orig else '[--]'
-        print(f'  {status} {std} <- {orig}')
+        label = Config.get_field_label(std)
+        print(f'  {status} {label}({std}) <- {orig}')
 
 # extra_ カラムを検出
 extra_cols = [c for c in df_mapped.columns if c.startswith('extra_') and c != 'extra_lead_id']
@@ -115,13 +117,14 @@ print()
 # 必須フィールドの欠損チェック
 print('=== 必須フィールド 欠損チェック ===')
 for field in ['visitor_name', 'company_name', 'email']:
+    label = Config.get_field_label(field)
     if field in df.columns:
         missing = df[field].isna().sum() + (df[field].astype(str).str.strip() == '').sum()
         pct = missing / total * 100
         flag = '[NG]' if missing > 0 else '[OK]'
-        print(f'  {flag} {field}: {missing}件 欠損 ({pct:.0f}%)')
+        print(f'  {flag} {label}({field}): {missing}件 欠損 ({pct:.0f}%)')
     else:
-        print(f'  [NG] {field}: カラム未検出')
+        print(f'  [NG] {label}({field}): カラム未検出')
 
 # メールアドレス形式チェック
 print()
@@ -153,12 +156,13 @@ else:
 print()
 print('=== 任意フィールド 充足率 ===')
 for field in ['department', 'job_title', 'memo', 'interested_products', 'future_requests', 'scan_time', 'rep_name']:
+    label = Config.get_field_label(field)
     if field in df.columns:
         filled = df[field].notna().sum() - (df[field].astype(str).str.strip() == '').sum()
         pct = max(filled, 0) / total * 100
-        print(f'  {field}: {max(filled,0)}/{total}件 ({pct:.0f}%)')
+        print(f'  {label}({field}): {max(filled,0)}/{total}件 ({pct:.0f}%)')
     else:
-        print(f'  {field}: 未検出 (--)')
+        print(f'  {label}({field}): 未検出 (--)')
 "
 ```
 
