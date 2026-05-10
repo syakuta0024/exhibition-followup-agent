@@ -314,13 +314,11 @@ def apply_column_mapping(df: pd.DataFrame, mapping: Dict[str, Optional[str]]) ->
         if field not in result_df.columns:
             result_df[field] = ""
 
-    # lead_id が存在しない場合は自動採番（L001, L002, ...）
-    # 外部CSVに lead_id カラムがあった場合は extra_lead_id に退避済みなので復元する
-    if "lead_id" not in result_df.columns:
-        if "extra_lead_id" in result_df.columns:
-            result_df.insert(0, "lead_id", result_df.pop("extra_lead_id"))
-        else:
-            result_df.insert(0, "lead_id", [f"L{i+1:03d}" for i in range(len(result_df))])
+    # lead_id が存在しないか空文字のみ（OPTIONAL_FIELDS 補完で空文字が入った場合）は採番する
+    if "lead_id" not in result_df.columns or result_df["lead_id"].eq("").all():
+        if "lead_id" in result_df.columns:
+            result_df = result_df.drop(columns=["lead_id"])
+        result_df.insert(0, "lead_id", [f"L{i+1:03d}" for i in range(len(result_df))])
 
     return result_df
 
