@@ -315,8 +315,12 @@ def apply_column_mapping(df: pd.DataFrame, mapping: Dict[str, Optional[str]]) ->
             result_df[field] = ""
 
     # lead_id が存在しない場合は自動採番（L001, L002, ...）
+    # 外部CSVに lead_id カラムがあった場合は extra_lead_id に退避済みなので復元する
     if "lead_id" not in result_df.columns:
-        result_df.insert(0, "lead_id", [f"L{i+1:03d}" for i in range(len(result_df))])
+        if "extra_lead_id" in result_df.columns:
+            result_df.insert(0, "lead_id", result_df.pop("extra_lead_id"))
+        else:
+            result_df.insert(0, "lead_id", [f"L{i+1:03d}" for i in range(len(result_df))])
 
     return result_df
 
