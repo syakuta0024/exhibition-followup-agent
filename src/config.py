@@ -259,6 +259,32 @@ class Config:
         },
     }
 
+    # ---------------------------------------------------------------
+    # フィールド日本語ラベル
+    # ---------------------------------------------------------------
+    FIELD_LABELS: dict = {
+        "visitor_name":        "氏名",
+        "company_name":        "会社名",
+        "email":               "メールアドレス",
+        "lead_rank":           "ランク",
+        "visit_date":          "来場日",
+        "interested_products": "関心製品",
+        "memo":                "メモ",
+        "future_requests":     "今後のご要望",
+        "rep_name":            "担当営業",
+        "scan_time":           "スキャン時刻",
+        "department":          "部署",
+        "job_title":           "役職",
+        "lead_id":             "リードID",
+        "phone":               "電話番号",
+        "address":             "住所",
+    }
+
+    @classmethod
+    def get_field_label(cls, field: str) -> str:
+        """標準フィールド名を日本語ラベルに変換。未登録の場合はそのまま返す。"""
+        return cls.FIELD_LABELS.get(field, field)
+
     @classmethod
     def validate(cls) -> bool:
         """
