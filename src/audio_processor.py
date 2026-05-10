@@ -19,6 +19,19 @@ from src.utils import setup_logger
 
 logger = setup_logger(__name__)
 
+
+def resolve_whisper_prompt(whisper_prompt: str, product_urls: dict) -> str:
+    """cli_config の設定から Whisper API の prompt 文字列を組み立てる。
+
+    優先順: ユーザー設定 → product_urls キー名の自動連結 → 空文字
+    """
+    if whisper_prompt:
+        return whisper_prompt
+    if product_urls:
+        return ", ".join(product_urls.keys())
+    return ""
+
+
 def _extract_recording_time(audio) -> Optional[datetime]:
     """
     複数フォーマット・タグから録音日時を抽出する。
@@ -104,7 +117,7 @@ class AudioProcessor:
 
     PRICE_PER_MIN: float = 0.006  # $/分（Whisper API）
 
-    def __init__(self, api_key: str, llm: Optional[ChatOpenAI] = None):
+    def __init__(self, api_key: str, llm: Optional[ChatOpenAI] = None, whisper_prompt: str = ""):
         """
         Parameters
         ----------
@@ -112,9 +125,12 @@ class AudioProcessor:
             OpenAI APIキー
         llm : ChatOpenAI, optional
             ニーズ抽出用LLM。None の場合はニーズ抽出は利用不可。
+        whisper_prompt : str
+            Whisper API の prompt パラメータ。業界用語・製品名を渡すと認識精度が上がる。
         """
         self._openai = openai.OpenAI(api_key=api_key)
         self._llm = llm
+        self._whisper_prompt = whisper_prompt
 
     # ------------------------------------------------------------------
     # メタデータ取得
@@ -218,11 +234,14 @@ class AudioProcessor:
 
         try:
             bio = io.BytesIO(file_bytes)
-            response = self._openai.audio.transcriptions.create(
-                model="whisper-1",
-                file=(filename, bio, content_type),
-                language=language,
-            )
+            create_kwargs: dict = {
+                "model": "whisper-1",
+                "file": (filename, bio, content_type),
+                "language": language,
+            }
+            if self._whisper_prompt:
+                create_kwargs["prompt"] = self._whisper_prompt
+            response = self._openai.audio.transcriptions.create(**create_kwargs)
             logger.info(f"文字起こし完了: {filename} ({len(response.text)}文字)")
             return response.text
 
