@@ -5,6 +5,9 @@ Skills / CLI 共通ビジネスロジック層。
 戻り値はすべて dict で統一し、呼び出し側でフォーマットする。
 """
 
+import os
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -306,6 +309,35 @@ def run_load_leads(
     }
 
 
+def _manage_output_path(output_naming: str, base_path: str) -> str:
+    """
+    output_naming に従い出力パスを決定する。
+
+    "timestamp" 時は既存の base_path を legacy/ に退避し、
+    タイムスタンプ付きの新パスを返す。"overwrite" 時は base_path をそのまま返す。
+    既存ファイルが存在しない場合は退避しない。
+    """
+    from src.utils import setup_logger
+    _log = setup_logger(__name__)
+
+    if output_naming != "timestamp":
+        return base_path
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_dir = os.path.dirname(base_path) or "output"
+    stem, ext = os.path.splitext(os.path.basename(base_path))
+    new_path = os.path.join(base_dir, f"{stem}_{ts}{ext}")
+
+    if os.path.exists(base_path):
+        legacy_dir = os.path.join(base_dir, "legacy")
+        os.makedirs(legacy_dir, exist_ok=True)
+        legacy_dst = os.path.join(legacy_dir, f"{stem}_{ts}{ext}")
+        shutil.move(base_path, legacy_dst)
+        _log.info(f"旧出力を退避: {legacy_dst}")
+
+    return new_path
+
+
 def run_generate(
     csv_path: Optional[str] = None,
     ranks: Optional[List[str]] = None,
@@ -355,7 +387,12 @@ def run_generate(
     _web = enable_web_search if enable_web_search is not None else config.get("enable_web_search", True)
     _rank_est = enable_rank_estimation if enable_rank_estimation is not None else config.get("enable_rank_estimation", True)
     _judge    = enable_llm_judge       if enable_llm_judge       is not None else config.get("enable_llm_judge", False)
-    _output = output_path or config.get("output_path", "output/emails.csv")
+    _output_naming = config.get("output_naming", "timestamp")
+    _canonical     = config.get("output_path", "output/emails.csv")
+    if output_path is not None:
+        _output = output_path  # 引数明示時は常に優先（後方互換）
+    else:
+        _output = _manage_output_path(_output_naming, _canonical)
     _ranks = ranks or config.get("default_ranks", ["A", "B", "C"])
     _product_urls = config.get("product_urls", {})
 
