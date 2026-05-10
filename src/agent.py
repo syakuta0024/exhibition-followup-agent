@@ -246,6 +246,17 @@ class FollowUpAgent:
             schedule_context=schedule_context,
         )
         _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
+
+        # ── Step 6.5: Python 機械チェック（Layer 1 検証） ──────────────
+        from src.email_validator import validate_email
+        validation = validate_email(
+            email.get("subject", ""), email.get("body", ""), lead, product_urls
+        )
+        if not validation.passed:
+            logger.warning(f"  検証エラー: {validation.errors}")
+        if validation.warnings:
+            logger.info(f"  検証警告: {validation.warnings}")
+
         _step(7, "完了", "done", "メール生成が完了しました")
 
         # ── 参照チャンクの構築 ──────────────────────────────────
@@ -317,6 +328,9 @@ class FollowUpAgent:
             "crm_structured": crm_structured,
             "web_search_results": web_info.get("results", []),
             "rank_info": rank_result,
+            "validation_passed": validation.passed,
+            "validation_errors": validation.errors,
+            "validation_warnings": validation.warnings,
         }
 
     def _match_crm_from_csv(
