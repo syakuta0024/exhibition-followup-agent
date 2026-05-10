@@ -149,6 +149,9 @@ class VectorDBManager:
             collection_name=self.collection_name,
             embedding_function=self.embeddings,
             persist_directory=self.persist_dir,
+            # コサイン距離 d∈[0,2] → スコア (1-d) が負になるケースをクランプ
+            # 負値をそのまま返すと LangChain の UserWarning が発火するため
+            relevance_score_fn=lambda distance: max(0.0, 1.0 - distance),
         )
 
     # ==================================================================
