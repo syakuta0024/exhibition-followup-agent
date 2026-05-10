@@ -118,7 +118,7 @@ class Config:
             "label": "メモ",
             "候補カラム名": [
                 "メモ", "フリーコメント", "備考", "Notes", "Memo", "memo", "コメント",
-                "Comment", "Remarks", "Note",
+                "Comment", "Remarks", "Note", "対応状況",
             ],
         },
         "visit_date": {
@@ -132,7 +132,7 @@ class Config:
             "label": "関心製品",
             "候補カラム名": [
                 "関心製品", "Products of interest", "興味", "関心", "Products", "interested_products", "ご興味",
-                "興味製品", "製品", "Product",
+                "興味製品", "製品", "Product", "興味のある商材", "興味のある製品", "商材",
             ],
         },
         "future_requests": {
@@ -149,7 +149,7 @@ class Config:
                 "ブース担当者", "対応者",
                 "Sales_Rep", "sales_rep", "Rep", "rep",
                 "Salesperson", "Staff", "Assigned_To",
-                "Sales Rep",
+                "Sales Rep", "フォロー担当", "スキャン担当者",
             ],
         },
         "scan_time": {
@@ -159,12 +159,12 @@ class Config:
                 "スキャン時間", "QRスキャン時刻",
                 "Scan_Time", "scan_time", "Visit_Time",
                 "Timestamp", "timestamp", "Scanned_At",
-                "Scan Time", "Time",
+                "Scan Time", "Time", "時間",
             ],
         },
         "lead_id": {
             "label": "リードID",
-            "候補カラム名": ["ID", "LeadID", "Lead ID", "lead_id"],
+            "候補カラム名": ["ID", "LeadID", "Lead ID", "lead_id", "No.", "No", "番号"],
         },
     }
 
