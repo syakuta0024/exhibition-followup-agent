@@ -16,3 +16,4 @@ product_urls:
 sender_company: NSW株式会社
 sender_name: ゆうり
 enable_llm_judge: false
+output_naming: timestamp
