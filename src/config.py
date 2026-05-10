@@ -109,23 +109,38 @@ class Config:
         },
         "lead_rank": {
             "label": "評価",
-            "候補カラム名": ["評価", "ランク", "商談確度", "Rating", "Rank", "lead_rank", "リード評価"],
+            "候補カラム名": [
+                "評価", "ランク", "商談確度", "Rating", "Rank", "lead_rank", "リード評価",
+                "リードランク", "Lead Rank", "Grade", "グレード",
+            ],
         },
         "memo": {
             "label": "メモ",
-            "候補カラム名": ["メモ", "フリーコメント", "備考", "Notes", "Memo", "memo", "コメント"],
+            "候補カラム名": [
+                "メモ", "フリーコメント", "備考", "Notes", "Memo", "memo", "コメント",
+                "Comment", "Remarks", "Note",
+            ],
         },
         "visit_date": {
             "label": "来場日",
-            "候補カラム名": ["来場日", "訪問日", "登録日", "Visit date", "Date", "visit_date"],
+            "候補カラム名": [
+                "来場日", "訪問日", "登録日", "Visit date", "Date", "visit_date",
+                "来場時刻", "来場日時", "VisitDate", "Visit Date", "訪問日時",
+            ],
         },
         "interested_products": {
             "label": "関心製品",
-            "候補カラム名": ["関心製品", "Products of interest", "興味", "関心", "Products", "interested_products", "ご興味"],
+            "候補カラム名": [
+                "関心製品", "Products of interest", "興味", "関心", "Products", "interested_products", "ご興味",
+                "興味製品", "製品", "Product",
+            ],
         },
         "future_requests": {
             "label": "今後のご要望",
-            "候補カラム名": ["要望", "ご要望", "今後の希望", "Requests", "future_requests"],
+            "候補カラム名": [
+                "要望", "ご要望", "今後の希望", "Requests", "future_requests",
+                "Request", "Needs", "ニーズ", "課題",
+            ],
         },
         "rep_name": {
             "label": "担当者名（ブース担当営業）",
@@ -134,6 +149,7 @@ class Config:
                 "ブース担当者", "対応者",
                 "Sales_Rep", "sales_rep", "Rep", "rep",
                 "Salesperson", "Staff", "Assigned_To",
+                "Sales Rep",
             ],
         },
         "scan_time": {
@@ -143,7 +159,12 @@ class Config:
                 "スキャン時間", "QRスキャン時刻",
                 "Scan_Time", "scan_time", "Visit_Time",
                 "Timestamp", "timestamp", "Scanned_At",
+                "Scan Time", "Time",
             ],
+        },
+        "lead_id": {
+            "label": "リードID",
+            "候補カラム名": ["ID", "LeadID", "Lead ID", "lead_id"],
         },
     }
 
