@@ -70,6 +70,7 @@ class FollowUpAgent:
         product_urls: Optional[Dict[str, str]] = None,
         candidate_dates: Optional[List[Dict]] = None,
         schedule_policy: str = "ab_only",
+        enable_llm_judge: bool = False,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -257,6 +258,22 @@ class FollowUpAgent:
         if validation.warnings:
             logger.info(f"  検証警告: {validation.warnings}")
 
+        # ── Step 6.6: LLM-as-a-Judge（Layer 2 検証） ──────────────
+        judge_result = None
+        if validation.passed and enable_llm_judge:
+            from src.email_judge import judge_email
+            judge_result = judge_email(
+                subject=email.get("subject", ""),
+                body=email.get("body", ""),
+                lead=lead,
+                lead_rank=lead.get("lead_rank", "C"),
+            )
+            if not judge_result.passed:
+                logger.warning(f"  Judge 不合格: score={judge_result.score}, "
+                               f"issues={judge_result.issues}")
+            else:
+                logger.info(f"  Judge 合格: score={judge_result.score}")
+
         _step(7, "完了", "done", "メール生成が完了しました")
 
         # ── 参照チャンクの構築 ──────────────────────────────────
@@ -331,6 +348,9 @@ class FollowUpAgent:
             "validation_passed": validation.passed,
             "validation_errors": validation.errors,
             "validation_warnings": validation.warnings,
+            "judge_passed":  judge_result.passed  if judge_result else None,
+            "judge_score":   judge_result.score   if judge_result else None,
+            "judge_issues":  judge_result.issues  if judge_result else [],
         }
 
     def _match_crm_from_csv(

@@ -320,6 +320,7 @@ def run_generate(
     on_progress: Optional[Callable] = None,
     candidate_dates: Optional[List[Dict]] = None,
     schedule_policy: str = "ab_only",
+    enable_llm_judge: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     展示会リードのフォローアップメールを一括生成して CSV に保存する。
@@ -353,6 +354,7 @@ def run_generate(
     _sender_name = sender_name if sender_name is not None else config.get("sender_name", "")
     _web = enable_web_search if enable_web_search is not None else config.get("enable_web_search", True)
     _rank_est = enable_rank_estimation if enable_rank_estimation is not None else config.get("enable_rank_estimation", True)
+    _judge    = enable_llm_judge       if enable_llm_judge       is not None else config.get("enable_llm_judge", False)
     _output = output_path or config.get("output_path", "output/emails.csv")
     _ranks = ranks or config.get("default_ranks", ["A", "B", "C"])
     _product_urls = config.get("product_urls", {})
@@ -407,6 +409,7 @@ def run_generate(
                 product_urls=_product_urls,
                 candidate_dates=candidate_dates,
                 schedule_policy=schedule_policy,
+                enable_llm_judge=_judge,
             )
             results.append(result)
         except Exception as e:
