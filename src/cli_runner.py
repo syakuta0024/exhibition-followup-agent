@@ -501,6 +501,41 @@ def validate_candidate_dates(input_str: str) -> Dict[str, Any]:
     }
 
 
+def run_setup_status() -> Dict[str, Any]:
+    """現在のセットアップ状態を一覧で返す（/setup 用補助関数）。"""
+    config = load_cli_config()
+    check = run_check()
+
+    def _find(label: str) -> dict:
+        for item in check["items"]:
+            if item["label"] == label:
+                return item
+        return {"status": "unknown", "detail": "不明"}
+
+    api = _find("OPENAI_API_KEY")
+    kb  = _find("ナレッジベース (KB)")
+    gm  = _find("Gmail credentials")
+    td  = _find("技術資料")
+
+    return {
+        "api_key_status":        api["status"],
+        "api_key_detail":        api["detail"],
+        "leads_csv":             config.get("leads_csv_path", "未設定"),
+        "sender_company":        config.get("sender_company") or "未設定",
+        "sender_name":           config.get("sender_name")    or "未設定",
+        "exhibition_name":       config.get("exhibition_name") or "未設定",
+        "exhibition_date":       config.get("exhibition_date") or "未設定",
+        "exhibition_venue":      config.get("exhibition_venue") or "未設定",
+        "tech_documents_status": td["status"],
+        "tech_documents_detail": td["detail"],
+        "kb_status":             kb["status"],
+        "kb_detail":             kb["detail"],
+        "gmail_status":          gm["status"],
+        "gmail_detail":          gm["detail"],
+        "default_ranks":         config.get("default_ranks", []),
+    }
+
+
 def run_draft_to_gmail(
     results: Optional[List[Dict]] = None,
     output_csv_path: Optional[str] = None,
