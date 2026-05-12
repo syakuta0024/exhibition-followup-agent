@@ -1,0 +1,4 @@
+LeadID,Name,Company,Department,Title,Email,Rank,Products,Requests,Notes,VisitDate
+E001,John Smith,Tokyo Manufacturing,Production Engineering,Manager,john@tokyo-mfg.co.jp,A,EdgeGuard,Budget 4M JPY,Strong interest in anomaly detection,2026-04-24
+E002,Mary Tanaka,Osaka Electric,IT,Section Chief,mary@osaka-denki.co.jp,B,DigiMA,Within 3 months,Considering digital twin,2026-04-24
+E003,Bob Suzuki,Nagoya Engineering,Plant,Plant Manager,bob@nagoya-eng.co.jp,C,Sorani,SCADA migration,Legacy system aging,2026-04-25
