@@ -34,3 +34,9 @@ output/
 # Gmail OAuth 認証情報（絶対にコミットしない）
 credentials/credentials.json
 credentials/token.json
+
+# LLM-as-a-Judge 一時出力
+_review_data.json
+
+# デモ用技術資料PDF（自社データは含めない）
+data/tech_documents/*.pdf

@@ -1,0 +1,4 @@
+lead_id,visitor_name,company_name,department,job_title,email,lead_rank,interested_products,future_requests,memo,visit_date,rep_name,scan_time
+AT001,田中テスト,テスト株式会社,製造部,部長,at001@test.com,A,DigiMA,詳細資料希望,IoT基盤に興味あり,2026-04-25,営業A,2026-04-25 10:30:00
+AT002,鈴木テスト,テスト工業,品質部,課長,at002@test.com,B,EdgeGuard,概算見積希望,品質管理改善希望,2026-04-25,営業A,2026-04-25 11:00:00
+AT003,佐藤テスト,テスト製作所,営業部,担当,at003@test.com,C,Sorani,情報収集中,検討段階,2026-04-25,,
