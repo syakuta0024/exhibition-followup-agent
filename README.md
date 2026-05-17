@@ -19,7 +19,7 @@
 以下の情報を統合し、リードごとに最適化されたフォローアップメールを生成する。
 
 - **リード情報**（展示会 CSV）: 氏名・会社名・興味製品・コメント・商談ランク
-- **製品技術資料**（RAG）: Markdown 形式の製品ドキュメントから関連情報を検索・引用
+- **製品技術資料**（RAG）: Markdown / PDF 形式の製品ドキュメントから関連情報を検索・引用
 - **CRM 情報**: 過去商談記録との照合でパーソナライズ精度を向上
 - **音声録音**: 展示ブースでの会話を文字起こしし、メール素材として活用
 - **Web 検索**: 訪問企業の最新ニュース・製品情報を動的に取得
@@ -59,11 +59,11 @@
 
 それぞれを別レイヤーで対処する設計に到達した。
 
-| Layer | 手法 | 検出対象 |
+| Layer | 実装 | 検出対象 |
 |---|---|---|
-| Layer 1 | Python 機械チェック（4 種のルール） | 内部 ID 漏れ・example.com・未設定 URL・関心外製品の言及 |
-| Layer 2 | LLM-as-a-Judge（任意有効化、コスト管理可能） | 論理矛盾・文脈逸脱 |
-| Layer 3 | Gmail 下書きで送信前の人間確認 | 最終確認 |
+| Layer 1 | `email_validator.py`（Python 機械チェック・API コストゼロ） | プレースホルダ漏れ・example.com・未設定 URL・関心外製品の言及 |
+| Layer 2 | `email_judge.py`（LLM-as-a-Judge・任意有効化） | 論理矛盾・文脈逸脱・トーンの不整合 |
+| Layer 3 | Gmail 下書き（送信前の人間確認） | 最終確認 |
 
 「ハルシネーション率 N% 削減」のような比較数値は測定していないが、**検出できる種類を明確に定義・実装したこと**が品質改善の基盤になった。
 
@@ -73,7 +73,7 @@
 
 **v2（現在）**: Claude Code Skills（Markdown による対話定義）に全面ピボット。UI コードをすべて削除し、操作フローは Markdown 1 ファイルで定義する方式に切り替えた。
 
-動くものを捨てる判断は心理的コストが高かったが、「ユーザーインターフェースは Claude Code が担う」と割り切ったことで保守性が大幅に向上した。
+動くものを捨てる判断は心理的コストが高かったが、「ユーザーインターフェースは Claude Code が担う」と割り切ったことで保守性が大幅に向上した。v1 開発時に `src/` 配下のビジネスロジックを UI フレームワーク非依存で実装していたため、ロジックは一行も書き直さずにインターフェース層だけを置き換えることができた。
 
 ---
 
@@ -98,38 +98,51 @@
 
 ## 技術スタック
 
-| 分類 | 技術 |
-|---|---|
-| LLM | gpt-4.1-nano (OpenAI) |
-| Embedding | text-embedding-3-small |
-| RAG | ChromaDB + BM25 ハイブリッド + 親子チャンク |
-| 音声文字起こし | Whisper |
-| Gmail | Gmail API（OAuth 2.0 / `gmail.compose` スコープ） |
-| UI | Claude Code Skills (Markdown) |
-
----
-
-## デモ
-
-> 動作デモのスクリーンショット・動画を追加予定  
-> （現状: 下記セットアップ手順を参照）
+| 分類 | 技術 | 用途 |
+|---|---|---|
+| LLM | gpt-5.4-nano (OpenAI) | メール生成・ランク推定・ニーズ抽出 |
+| Embedding | text-embedding-3-small (OpenAI) | ドキュメントのベクトル化 |
+| RAG | ChromaDB + BM25 + RRF | ハイブリッド検索・親子チャンク |
+| 品質検証 Layer 1 | `email_validator.py`（Python 機械チェック） | プレースホルダ漏れ・関心外製品の言及を API コストゼロで検出 |
+| 品質検証 Layer 2 | `email_judge.py`（LLM-as-a-Judge） | 論理矛盾・文脈逸脱の審査（任意有効化） |
+| 音声文字起こし | Whisper（whisper-1） | 展示ブース会話の文字起こし・ニーズ抽出 |
+| CRM 名寄せ | rapidfuzz | メール完全一致 + 社名ファジーマッチ |
+| Web 検索 | ddgs（DuckDuckGo、API キー不要） | 企業情報・最新動向のリアルタイム取得 |
+| Gmail 連携 | Gmail API（OAuth 2.0） | 生成メールの下書き一括保存 |
+| 音声メタデータ | mutagen（オプション） | 録音日時・再生時間の取得（タイムスタンプ紐づけ用） |
+| PDF 取り込み | pypdf（オプション） | 製品資料 PDF のテキスト抽出 |
+| UI | Claude Code Skills（Markdown） | 対話型操作フロー |
 
 ---
 
 ## セットアップ
 
 ```bash
-# 1. 依存パッケージをインストール
-pip install -r requirements.txt
+# 1. リポジトリをクローン
+git clone https://github.com/syakuta0024/exhibition-followup-agent.git
+cd exhibition-followup-agent
 
-# 2. .env を作成して OPENAI_API_KEY を設定
-echo "OPENAI_API_KEY=sk-..." > .env
+# 2. 仮想環境を作成・依存パッケージをインストール
+python -m venv .venv
+.venv/Scripts/pip install -r requirements.txt        # Windows
+# source .venv/bin/activate && pip install -r requirements.txt  # Mac/Linux
 
-# 3. Claude Code で /setup を実行
+# 3. API キーを設定
+cp .env.example .env
+# .env を開き OPENAI_API_KEY=sk-... を記載
+
+# 4. Claude Code を起動し、セットアップを実行
+claude
 /setup
 ```
 
-### 主な Skill
+`/setup` は 9 ステップの対話形式で、送信元会社名の設定・製品資料の配置・Gmail 認証まで順番に案内する。初回はここから始めれば迷わない。
+
+> **Gmail 下書き機能を使う場合**: Google Cloud Console で OAuth クライアント ID を作成し、`credentials/credentials.json` として配置する。詳細は `/setup` の Step 7 で案内される。
+
+---
+
+## 主な Skill
 
 | Skill | 機能 |
 |---|---|
@@ -140,8 +153,11 @@ echo "OPENAI_API_KEY=sk-..." > .env
 | `/audio-matching` | 音声録音 → リード紐づけ |
 | `/match-records` | リード ↔ CRM 照合 |
 
+---
+
 ## ドキュメント
 
-- [`system_overview.md`](system_overview.md) — システム全体のアーキテクチャ・設計判断
+- [`system_overview.md`](system_overview.md) — システム全体のアーキテクチャ・設計判断・コスト試算
 - [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) — 改善ロードマップ・バックログ
 - [`docs/hallucination-mitigation.md`](docs/hallucination-mitigation.md) — ハルシネーション対策ノウハウ
+- [`docs/project-structure.md`](docs/project-structure.md) — フォルダ・ファイル構成と各ファイルの意味
