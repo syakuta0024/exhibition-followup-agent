@@ -9,6 +9,7 @@ pandas
 rank_bm25
 rapidfuzz
 pypdf
+pymupdf
 ddgs
 mutagen
 pyyaml

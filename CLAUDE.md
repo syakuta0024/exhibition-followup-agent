@@ -13,6 +13,8 @@
 | 「音声ファイルを紐づけて」「録音を紐づけたい」 | `/audio-matching` |
 | 「データの状態を確認して」「CSVを点検して」 | `/inspect-data` |
 | 「CRMと照合して」「名寄せしたい」 | `/match-records` |
+| 「KBの状態を確認して」「ナレッジベースに何が入ってる？」「チャンク数を見て」 | `/kb-status` |
+| 「ランク値を正規化して」「商談確度の値がバラバラ」「ランクのマッピングを確認して」 | `/rank-mapping` |
 
 ### Skills 一覧（.claude/commands/）
 
@@ -23,6 +25,8 @@
 | `/audio-matching` | [.claude/commands/audio-matching.md](.claude/commands/audio-matching.md) | 音声ファイル紐づけ・文字起こし |
 | `/inspect-data` | [.claude/commands/inspect-data.md](.claude/commands/inspect-data.md) | データ品質チェック（読み取り専用） |
 | `/match-records` | [.claude/commands/match-records.md](.claude/commands/match-records.md) | リード ↔ CRM の紐づけ確認 |
+| `/kb-status` | [.claude/commands/kb-status.md](.claude/commands/kb-status.md) | ナレッジベース状態確認（登録ドキュメント・チャンク数・最終更新） |
+| `/rank-mapping` | [.claude/commands/rank-mapping.md](.claude/commands/rank-mapping.md) | ランク値の正規化マッピング確認・保存（カラムの「値」の揺れに対応） |
 
 ### ビジネスロジックの呼び出し方（Skills 内での標準パターン）
 
@@ -82,6 +86,44 @@ print(cfg)
 # 変更する場合:
 # cfg['sender_company'] = '株式会社XXX'
 # save_cli_config(cfg)
+"
+
+# ランク値マッピング推定（/rank-mapping Skill で使用）
+.venv/Scripts/python -c "
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+from src.config import Config
+from src.cli_runner import load_cli_config, run_rank_mapping
+from langchain_openai import ChatOpenAI
+
+cfg = load_cli_config()
+client = ChatOpenAI(model=Config.LLM_MODEL, temperature=0, openai_api_key=Config.OPENAI_API_KEY)
+result = run_rank_mapping(
+    leads_csv_path=cfg.get('leads_csv_path', 'data/leads.csv'),
+    rank_field='lead_rank',
+    client=client,
+)
+import json
+print(json.dumps(result, ensure_ascii=False, indent=2))
+"
+
+# Google Calendar 空き時間取得（/email-workflow Step 5.5 で使用）
+.venv/Scripts/python -c "
+import sys, json
+sys.stdout.reconfigure(encoding='utf-8')
+from src.cli_runner import run_fetch_calendar_slots
+
+result = run_fetch_calendar_slots(
+    days_ahead=14,       # 何日先まで探すか
+    duration_minutes=60, # 商談の想定時間（分）
+)
+if result['error']:
+    print('ERROR:', result['error'])
+else:
+    print(f'空き枠: {len(result[\"slots\"])}件')
+    for s in result['slots']:
+        print(f'  {s[\"display\"]}')
+    print('formatted:', result['formatted'])
 "
 ```
 
@@ -150,11 +192,13 @@ exhibition-followup-agent/
 │       ├── csv-mapping.md      # /csv-mapping: カラムマッピング確認
 │       ├── audio-matching.md   # /audio-matching: 音声ファイル紐づけ
 │       ├── inspect-data.md     # /inspect-data: データ品質チェック
-│       └── match-records.md    # /match-records: CRM紐づけ確認
+│       ├── match-records.md    # /match-records: CRM紐づけ確認
+│       └── kb-status.md        # /kb-status: ナレッジベース状態確認
 ├── src/
 │   ├── config.py           # 設定・定数（モデル名・料金・フィールド定義）
 │   ├── agent.py            # オーケストレーター（FollowUpAgent）
-│   ├── vectordb.py         # ChromaDB + BM25 ハイブリッド検索 + 親子チャンク
+│   ├── vectordb.py         # ChromaDB + BM25 ハイブリッド検索 + 親子チャンク（PDF対応）
+│   ├── pdf_processor.py    # VLM（gpt-5.4-nano vision）による PDF テキスト化（PyMuPDF使用）
 │   ├── email_generator.py  # LLMメール生成（EmailGenerator）
 │   ├── rank_estimator.py   # ランク正規化 + LLM推定（RankEstimator）
 │   ├── web_searcher.py     # DuckDuckGo企業情報検索（WebSearcher）
@@ -162,11 +206,12 @@ exhibition-followup-agent/
 │   ├── audio_processor.py  # Whisper文字起こし + LLMニーズ抽出（AudioProcessor）
 │   ├── audio_matcher.py    # ファイル名解析 + リード紐づけエンジン（AudioMatcher）
 │   ├── gmail_drafter.py    # Gmail API で下書き作成（GmailDrafter）
-│   ├── cli_runner.py       # Skills共通ビジネスロジック（run_check/build_kb/generate/draft）
+│   ├── calendar_client.py  # Google Calendar API で空き時間取得（fetch_free_slots / format_slots_for_email）
+│   ├── cli_runner.py       # Skills共通ビジネスロジック（run_check/build_kb/generate/draft/kb_status/fetch_calendar_slots）
 │   └── utils.py            # ロガー・品質チェック等ユーティリティ
 ├── data/
 │   ├── leads.csv           # リードデータ（入力）
-│   ├── tech_documents/     # 製品技術資料 Markdown（空ディレクトリ。自社MDを配置する）
+│   ├── tech_documents/     # 製品技術資料（.md と .pdf を配置する。PDF は VLM でテキスト化）
 │   └── crm_records/        # 商談記録 Markdown（空ディレクトリ。自社MDを配置する）
 ├── chroma_db/              # ChromaDB永続化ディレクトリ
 │   └── parent_store.json   # 親チャンクのテキスト保存（親子チャンク用）
@@ -253,6 +298,13 @@ AUDIO_RED_FLAG_WARNING_THRESHOLD: float = 0.30  # 赤フラグ率の警告閾値
 リードCSVはRX Japan Lead Manager / Q-PASS / Sansan 等の異なるカラム名に対応。
 `Config.REQUIRED_FIELDS` と `Config.OPTIONAL_FIELDS` で候補カラム名を定義。
 マッピング外のカスタム質問列は `extra_` プレフィックスで自動保持され、メール生成のコンテキストに使用される。
+
+### 担当者系フィールド（rep_name と follow_person の分離）
+
+LeadManager CSV には「スキャン担当者」と「フォロー担当」という 2 つの担当者列が存在する。両者は役割が異なるため、別フィールドにマッピングする。
+
+- `rep_name`: **スキャン担当者専用**。`/audio-matching` で音声ファイルのファイル名（例: `20260424_営業A_001.m4a`）とリードの担当者名を照合するために使用する。候補カラム名: `担当者名` / `担当営業` / `スキャン担当者` 等。フォロー担当列は含めない（音声紐づけが失敗するため）。
+- `follow_person`: **フォロー担当（営業担当者名）**。`rep_name` とは別フィールドで、メール生成・音声処理いずれにも使用しない。LeadManager の「フォロー担当」列を取り込むためだけに存在する将来拡張用フィールド。候補カラム名: `フォロー担当` / `営業担当` / `フォロー営業` / `follow_person`。
 
 ---
 

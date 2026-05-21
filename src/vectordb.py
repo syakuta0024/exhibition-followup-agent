@@ -19,6 +19,8 @@ import glob
 import json
 from typing import List, Dict, Any, Optional, Tuple
 
+from src.pdf_processor import is_pdf, extract_text_from_pdf_vlm
+
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -175,9 +177,14 @@ class VectorDBManager:
         """
         print("インデックス構築を開始します...")
 
-        # ① 先にMarkdownファイルを読み込む（既存KBに触る前に）
-        tech_docs = self._load_markdown_files(tech_docs_dir, source_type="tech_doc")
-        print(f"  技術資料: {len(tech_docs)} ファイル読み込み完了")
+        # ① 先にファイルを読み込む（既存KBに触る前に）
+        tech_md_docs = self._load_markdown_files(tech_docs_dir, source_type="tech_doc")
+        print(f"  技術資料(Markdown): {len(tech_md_docs)} ファイル読み込み完了")
+
+        tech_pdf_docs = self._load_pdf_files_vlm(tech_docs_dir, source_type="tech_doc")
+        print(f"  技術資料(PDF/VLM): {len(tech_pdf_docs)} ファイル読み込み完了")
+
+        tech_docs = tech_md_docs + tech_pdf_docs
 
         crm_docs = self._load_markdown_files(crm_records_dir, source_type="crm_record")
         print(f"  CRM記録: {len(crm_docs)} ファイル読み込み完了")
@@ -187,9 +194,9 @@ class VectorDBManager:
         # ② ファイルが0件なら既存KBを保護して早期return
         if not all_raw_docs:
             raise ValueError(
-                "Markdownファイルが見つかりません。"
-                f"{tech_docs_dir}/ または {crm_records_dir}/ に "
-                ".md ファイルを配置してから再実行してください。"
+                "ファイルが見つかりません。"
+                f"{tech_docs_dir}/ に .md または .pdf ファイルを、"
+                f"{crm_records_dir}/ に .md ファイルを配置してから再実行してください。"
             )
 
         # ③ 親子チャンクを事前生成（コレクション削除前に完成させる）
@@ -222,7 +229,7 @@ class VectorDBManager:
                     child.page_content = context_prefix + child.page_content
                 all_chunks.extend(child_chunks)
 
-        print(f"  Markdownチャンク: 子={len(all_chunks)}件 / 親={len(parent_store_new)}件")
+        print(f"  チャンク生成: 子={len(all_chunks)}件 / 親={len(parent_store_new)}件")
 
         # ④ チャンクが0件なら早期return（既存KBは保護）
         if not all_chunks:
@@ -319,6 +326,9 @@ class VectorDBManager:
             metadata: Dict[str, Any] = {
                 "source_type": source_type,
                 "source_file": os.path.basename(filepath),
+                "source": os.path.basename(filepath),
+                "doc_format": "markdown",
+                "page": None,
             }
 
             if source_type == "tech_doc":
@@ -351,6 +361,84 @@ class VectorDBManager:
                 # 商談ステージ（初回/提案中/PoC/契約交渉）
                 deal_stage = _infer_deal_stage(text)
                 metadata["deal_stage"] = deal_stage
+
+            docs.append({"text": text, "metadata": metadata})
+
+        return docs
+
+    # ==================================================================
+    # PDF ファイル読み込み（VLM テキスト化）
+    # ==================================================================
+
+    def _load_pdf_files_vlm(self, directory: str, source_type: str) -> List[Dict]:
+        """
+        指定ディレクトリ内の PDF ファイルを VLM でテキスト化し、強化メタデータを付与する。
+
+        PyMuPDF が未インストールの場合は警告を表示してスキップする（クラッシュしない）。
+        OpenAI API キーは Config.OPENAI_API_KEY を使用する。
+
+        Parameters
+        ----------
+        directory : str
+            読み込み対象ディレクトリ
+        source_type : str
+            ドキュメント種別タグ（'tech_doc' 等）
+
+        Returns
+        -------
+        List[Dict]
+            ドキュメントのリスト（text, metadata）
+        """
+        if not os.path.exists(directory):
+            return []
+
+        pdf_files = sorted(glob.glob(os.path.join(directory, "*.pdf")))
+        if not pdf_files:
+            return []
+
+        try:
+            import fitz  # noqa: F401 – 存在確認のみ
+        except ImportError:
+            print(
+                "  警告: PyMuPDF がインストールされていないため PDF をスキップします。\n"
+                "        インストール: .venv/Scripts/pip install pymupdf"
+            )
+            return []
+
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=Config.OPENAI_API_KEY)
+        except Exception as e:
+            print(f"  警告: OpenAI クライアントの初期化に失敗しました。PDF をスキップします: {e}")
+            return []
+
+        docs = []
+        for filepath in pdf_files:
+            filename = os.path.basename(filepath)
+            base_name = os.path.splitext(filename)[0]
+            print(f"  PDF 処理中: {filename}")
+
+            try:
+                text = extract_text_from_pdf_vlm(filepath, client, Config.LLM_MODEL)
+            except Exception as e:
+                print(f"  警告: {filename} の VLM テキスト化に失敗しました: {e}")
+                continue
+
+            if not text.strip():
+                print(f"  警告: {filename} からテキストを取得できませんでした")
+                continue
+
+            metadata: Dict[str, Any] = {
+                "source_type": source_type,
+                "source_file": filename,
+                "source": filename,
+                "doc_format": "pdf",
+                "page": None,
+                "product_name": PRODUCT_NAME_MAP.get(base_name, base_name),
+                "product_category": PRODUCT_CATEGORY_MAP.get(base_name, "その他"),
+                "target_industries": PRODUCT_TARGET_INDUSTRIES_MAP.get(base_name, "製造業"),
+                "keywords": base_name,
+            }
 
             docs.append({"text": text, "metadata": metadata})
 

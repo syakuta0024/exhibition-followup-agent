@@ -123,17 +123,13 @@ def run_check() -> Dict[str, Any]:
     if tech_dir.exists():
         md_files = list(tech_dir.glob("*.md"))
         pdf_files = list(tech_dir.glob("*.pdf"))
-        if md_files:
-            items.append({"label": "技術資料", "status": "ok", "detail": f"{len(md_files)} 件の Markdown"})
-        elif pdf_files:
-            items.append({
-                "label": "技術資料",
-                "status": "warning",
-                "detail": (
-                    f".pdf ファイルが {len(pdf_files)} 件あります（直接読み込めません）。"
-                    "Markdown に変換して配置してください（例: tech_doc_DigiMA.pdf → DigiMA.md）"
-                ),
-            })
+        if md_files or pdf_files:
+            detail_parts = []
+            if md_files:
+                detail_parts.append(f"{len(md_files)} 件の Markdown")
+            if pdf_files:
+                detail_parts.append(f"{len(pdf_files)} 件の PDF（VLM でテキスト化）")
+            items.append({"label": "技術資料", "status": "ok", "detail": "、".join(detail_parts)})
         else:
             items.append({
                 "label": "技術資料",
@@ -534,6 +530,108 @@ def run_setup_status() -> Dict[str, Any]:
         "gmail_detail":          gm["detail"],
         "default_ranks":         config.get("default_ranks", []),
     }
+
+
+def run_kb_status() -> Dict[str, Any]:
+    """
+    ChromaDB のナレッジベース状態を返す。
+
+    Returns
+    -------
+    dict
+        total_chunks (int): 総チャンク数
+        documents (list): ドキュメントごとの情報リスト
+            - source (str): ファイル名
+            - source_type (str): "markdown" / "pdf" / "unknown"
+            - chunk_count (int): チャンク数
+        last_updated (str or None): 最終更新日時 "YYYY-MM-DD HH:MM"
+        is_empty (bool): KB が空なら True
+    """
+    from src.config import Config
+    from collections import defaultdict
+
+    chroma_sqlite = Path(Config.CHROMA_DB_DIR) / "chroma.sqlite3"
+    if not chroma_sqlite.exists() or chroma_sqlite.stat().st_size <= 1000:
+        return {
+            "total_chunks": 0,
+            "documents": [],
+            "last_updated": None,
+            "is_empty": True,
+        }
+
+    try:
+        import chromadb as _chromadb
+        _client = _chromadb.PersistentClient(path=str(Config.CHROMA_DB_DIR))
+        try:
+            _col = _client.get_collection(Config.CHROMA_COLLECTION_NAME)
+        except Exception:
+            return {
+                "total_chunks": 0,
+                "documents": [],
+                "last_updated": None,
+                "is_empty": True,
+            }
+
+        results = _col.get(include=["metadatas"])
+        metadatas: list = results.get("metadatas") or []
+
+        if not metadatas:
+            return {
+                "total_chunks": 0,
+                "documents": [],
+                "last_updated": None,
+                "is_empty": True,
+            }
+
+        # ソースファイルごとにチャンク数・フォーマットを集計
+        doc_chunks: Dict[str, int] = defaultdict(int)
+        doc_formats: Dict[str, str] = {}
+
+        for meta in metadatas:
+            source_file = meta.get("source_file") or meta.get("source") or "unknown"
+            doc_chunks[source_file] += 1
+            if source_file not in doc_formats:
+                # doc_format フィールドがあれば優先、なければ拡張子から判定
+                doc_format = meta.get("doc_format")
+                if doc_format is None:
+                    if source_file.lower().endswith(".pdf"):
+                        doc_format = "pdf"
+                    elif source_file.lower().endswith(".md"):
+                        doc_format = "markdown"
+                    else:
+                        doc_format = "unknown"
+                doc_formats[source_file] = doc_format
+
+        documents = [
+            {
+                "source": source_file,
+                "source_type": doc_formats.get(source_file, "unknown"),
+                "chunk_count": count,
+            }
+            for source_file, count in sorted(doc_chunks.items())
+        ]
+
+        # 最終更新日時: chroma_db/ ディレクトリの mtime で代替
+        try:
+            mtime = os.path.getmtime(str(Config.CHROMA_DB_DIR))
+            last_updated = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            last_updated = None
+
+        return {
+            "total_chunks": len(metadatas),
+            "documents": documents,
+            "last_updated": last_updated,
+            "is_empty": False,
+        }
+
+    except Exception:
+        return {
+            "total_chunks": 0,
+            "documents": [],
+            "last_updated": None,
+            "is_empty": True,
+        }
 
 
 def run_draft_to_gmail(
