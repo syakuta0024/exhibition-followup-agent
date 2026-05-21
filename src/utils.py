@@ -7,6 +7,7 @@
 import io
 import logging
 import os
+import sys
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -36,8 +37,12 @@ def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
 
     logger.setLevel(level)
 
-    # コンソール出力ハンドラ
-    handler = logging.StreamHandler()
+    # コンソール出力ハンドラ（Windows CP932 文字化け対策）
+    try:
+        stream = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
+    except AttributeError:
+        stream = sys.stdout
+    handler = logging.StreamHandler(stream=stream)
     handler.setLevel(level)
 
     # フォーマット: 時刻 [ロガー名] レベル: メッセージ
@@ -362,6 +367,36 @@ def check_lead_quality(lead: dict) -> dict:
     total = len(REQUIRED_FOR_QUALITY)
     score = round((total - len(errors) - len(warnings)) / total * 100)
     return {"errors": errors, "warnings": warnings, "score": score}
+
+
+def extract_unique_rank_values(leads: list, rank_field: str) -> list:
+    """
+    リストからランクフィールドのユニーク値を返す。空文字・None は除外する。
+    出現順を維持して重複を除去する。
+    """
+    seen: set = set()
+    result: list = []
+    for lead in leads:
+        val = str(lead.get(rank_field, "") or "").strip()
+        if val and val not in seen:
+            seen.add(val)
+            result.append(val)
+    return result
+
+
+def normalize_rank_values(leads: list, rank_field: str, mapping: dict) -> list:
+    """
+    leads の rank_field の値を mapping に従って正規化した新しいリストを返す。
+    mapping にないキーはそのまま残す（クラッシュしない）。元の leads は変更しない。
+    """
+    result = []
+    for lead in leads:
+        new_lead = dict(lead)
+        val = str(lead.get(rank_field, "") or "").strip()
+        if val in mapping:
+            new_lead[rank_field] = mapping[val]
+        result.append(new_lead)
+    return result
 
 
 def save_results_to_csv(results: List[Dict], output_path: str) -> None:

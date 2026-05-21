@@ -145,11 +145,17 @@ class Config:
         "rep_name": {
             "label": "担当者名（ブース担当営業）",
             "候補カラム名": [
-                "担当者名", "担当者", "営業担当", "担当営業",
+                "担当者名", "担当者", "担当営業",
                 "ブース担当者", "対応者",
                 "Sales_Rep", "sales_rep", "Rep", "rep",
                 "Salesperson", "Staff", "Assigned_To",
-                "Sales Rep", "フォロー担当", "スキャン担当者",
+                "Sales Rep", "スキャン担当者",
+            ],
+        },
+        "follow_person": {
+            "label": "フォロー担当",
+            "候補カラム名": [
+                "フォロー担当", "営業担当", "フォロー営業", "follow_person",
             ],
         },
         "scan_time": {
@@ -272,6 +278,7 @@ class Config:
         "memo":                "メモ",
         "future_requests":     "今後のご要望",
         "rep_name":            "担当営業",
+        "follow_person":       "フォロー担当",
         "scan_time":           "スキャン時刻",
         "department":          "部署",
         "job_title":           "役職",

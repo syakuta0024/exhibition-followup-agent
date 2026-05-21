@@ -61,6 +61,7 @@ class AudioMatcher:
         対応フォーマット:
         - 20260424_営業A_001.mp3  → "営業A"
         - 営業B_002.wav           → "営業B"
+        - 20260115_001.mp3        → None（日付＋連番のみ・担当者名なし）
         - untitled.mp3            → None
         """
         # 拡張子を除いたベース名で照合
@@ -68,7 +69,12 @@ class AudioMatcher:
         m = _FILENAME_PATTERN.match(basename + ".ext")  # パターンには拡張子が必要なため付与
         if m:
             rep = m.group(1).strip()
-            return rep if rep else None
+            if not rep:
+                return None
+            # 担当者名部分が日付プレフィックス（6〜8桁の数字のみ）の場合は担当者名なしとみなす
+            if re.fullmatch(r"\d{6,8}", rep):
+                return None
+            return rep
         return None
 
     def parse_rep_from_csv_filename(self, filename: str) -> Optional[str]:
@@ -175,6 +181,15 @@ class AudioMatcher:
             # filename → (lead_idx, timedelta) : 時刻差も保持して重複時に比較する
             timestamp_matched: Dict[str, tuple] = {}
 
+            # 候補リードのスキャン日時を事前解決（LeadManager の日付/時刻分離列にも対応）
+            date_col = "visit_date" if "visit_date" in leads_df.columns else None
+            scan_dts: Dict[int, Optional[datetime]] = {}
+            if timestamp_col and timestamp_col in leads_df.columns:
+                for i in candidate_idxs:
+                    scan_dts[i] = _resolve_scan_dt(
+                        leads_df.loc[i], timestamp_col, date_col
+                    )
+
             if (
                 timestamp_col
                 and timestamp_col in leads_df.columns
@@ -182,8 +197,7 @@ class AudioMatcher:
             ):
                 leads_sorted = sorted(
                     candidate_idxs,
-                    key=lambda i: _parse_dt(leads_df.loc[i, timestamp_col])
-                    or datetime.min,
+                    key=lambda i: scan_dts.get(i) or datetime.min,
                 )
                 tolerance = timedelta(minutes=tolerance_minutes)
 
@@ -196,7 +210,7 @@ class AudioMatcher:
                     for lead_idx in leads_sorted:
                         if lead_idx in used_lead_idxs:
                             continue
-                        scan_dt = _parse_dt(leads_df.loc[lead_idx, timestamp_col])
+                        scan_dt = scan_dts.get(lead_idx)
                         if not scan_dt:
                             continue
                         delta = abs(scan_dt - audio_start)
@@ -224,7 +238,7 @@ class AudioMatcher:
             if timestamp_col and timestamp_col in leads_df.columns:
                 sequential_idxs = sorted(
                     [i for i in candidate_idxs if i not in used_lead_idxs],
-                    key=lambda i: _parse_dt(leads_df.loc[i, timestamp_col]) or datetime.min,
+                    key=lambda i: scan_dts.get(i) or datetime.min,
                 )
             else:
                 sequential_idxs = [i for i in candidate_idxs if i not in used_lead_idxs]
@@ -546,3 +560,100 @@ def _parse_dt(value) -> Optional[datetime]:
         return ts.to_pydatetime()
     except Exception:
         return None
+
+
+# (regex, hour-group-idx, minute-group-idx, second-group-idx or None)
+_TIME_FORMATS = [
+    # "10:30" / "10:30:00"
+    (re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$"), 1, 2, 3),
+    # "10時30分" / "10時30分0秒"
+    (re.compile(r"^(\d{1,2})時(\d{1,2})分(?:(\d{1,2})秒)?$"), 1, 2, 3),
+    # "1030" 4桁数字
+    (re.compile(r"^(\d{2})(\d{2})$"), 1, 2, None),
+]
+
+
+def _normalize_time_only(s: str) -> Optional[str]:
+    """時刻のみ文字列を HH:MM:SS に正規化する。妥当な時刻でなければ None。"""
+    for pattern, h_idx, m_idx, s_idx in _TIME_FORMATS:
+        m = pattern.match(s)
+        if not m:
+            continue
+        try:
+            h = int(m.group(h_idx))
+            mn = int(m.group(m_idx))
+            sc = int(m.group(s_idx)) if s_idx and m.group(s_idx) else 0
+        except (ValueError, IndexError):
+            continue
+        if 0 <= h <= 23 and 0 <= mn <= 59 and 0 <= sc <= 59:
+            return f"{h:02d}:{mn:02d}:{sc:02d}"
+    return None
+
+
+# (regex, has_year_flag): has_year=False の場合は現在年で補完
+_DATE_FORMATS = [
+    # 2026-01-15 / 2026/01/15
+    (re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$"), True),
+    # 2026年1月15日
+    (re.compile(r"^(\d{4})年(\d{1,2})月(\d{1,2})日$"), True),
+    # 20260115
+    (re.compile(r"^(\d{4})(\d{2})(\d{2})$"), True),
+    # 1月15日（年なし → 現在年で補完）
+    (re.compile(r"^(\d{1,2})月(\d{1,2})日$"), False),
+]
+
+
+def _normalize_date_only(s: str) -> Optional[str]:
+    """日付のみ文字列を YYYY-MM-DD に正規化する。妥当な日付でなければ None。"""
+    for pattern, has_year in _DATE_FORMATS:
+        m = pattern.match(s)
+        if not m:
+            continue
+        try:
+            if has_year:
+                year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            else:
+                year = datetime.now().year
+                month, day = int(m.group(1)), int(m.group(2))
+            datetime(year, month, day)  # 妥当性検証
+            return f"{year:04d}-{month:02d}-{day:02d}"
+        except (ValueError, IndexError):
+            continue
+    return None
+
+
+def _resolve_scan_dt(
+    row: pd.Series,
+    timestamp_col: Optional[str],
+    date_col: Optional[str] = None,
+) -> Optional[datetime]:
+    """
+    リード行から「スキャン日時」を解決する。
+
+    timestamp_col の値が時刻のみ（HH:MM / HH:MM:SS / X時Y分 / HHMM）の場合に、
+    date_col の日付（YYYY-MM-DD / YYYY/MM/DD / YYYY年M月D日 / YYYYMMDD / M月D日）と
+    結合して datetime を返す。それ以外（既に日時を含む文字列など）は timestamp_col
+    単独で解析する。
+    """
+    if not timestamp_col:
+        return None
+    raw = row.get(timestamp_col)
+    if raw is None or (isinstance(raw, float) and raw != raw):
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+
+    norm_time = _normalize_time_only(s)
+    if norm_time and date_col:
+        date_raw = row.get(date_col)
+        if date_raw is not None and not (isinstance(date_raw, float) and date_raw != date_raw):
+            date_s = str(date_raw).strip()
+            if date_s:
+                # 日付側を正規化できれば優先、無理なら raw で _parse_dt に賭ける
+                norm_date = _normalize_date_only(date_s) or date_s
+                combined = _parse_dt(f"{norm_date} {norm_time}")
+                if combined is not None:
+                    return combined
+
+    return _parse_dt(s)

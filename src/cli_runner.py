@@ -634,6 +634,98 @@ def run_kb_status() -> Dict[str, Any]:
         }
 
 
+def run_rank_mapping(leads_csv_path: str, rank_field: str, client) -> Dict[str, Any]:
+    """
+    CSVを読み込み → ユニーク値抽出 → LLM 推定 → 結果を返す。
+
+    Returns
+    -------
+    dict
+        unique_values (list[str]): ランクフィールドのユニーク値
+        proposed_mapping (dict[str, str]): LLM が推定したマッピング
+        already_clean (bool): すべての値がすでに A〜E の場合 True
+        error (str, optional): エラーメッセージ（異常時のみ）
+    """
+    import re as _re
+    from src.utils import load_leads, extract_unique_rank_values
+    from src.rank_estimator import infer_rank_mapping_with_llm
+
+    try:
+        df = load_leads(leads_csv_path)
+    except FileNotFoundError as e:
+        return {"unique_values": [], "proposed_mapping": {}, "already_clean": False, "error": str(e)}
+
+    if rank_field not in df.columns:
+        return {
+            "unique_values": [],
+            "proposed_mapping": {},
+            "already_clean": False,
+            "error": f"フィールド '{rank_field}' が CSV に存在しません",
+        }
+
+    leads = df.to_dict(orient="records")
+    unique_values = extract_unique_rank_values(leads, rank_field)
+
+    clean_pattern = _re.compile(r"^[A-Ea-e]$")
+    already_clean = bool(unique_values) and all(clean_pattern.match(v) for v in unique_values)
+
+    if already_clean:
+        return {"unique_values": unique_values, "proposed_mapping": {}, "already_clean": True}
+
+    proposed_mapping = infer_rank_mapping_with_llm(unique_values, client)
+
+    return {"unique_values": unique_values, "proposed_mapping": proposed_mapping, "already_clean": False}
+
+
+def run_fetch_calendar_slots(
+    days_ahead: int = 14,
+    duration_minutes: int = 60,
+) -> dict:
+    """
+    Google Calendar から空き時間スロットを取得する。
+
+    cli_config.yaml の calendar: セクションの値を優先し、
+    引数はデフォルト値として使用する。
+
+    Returns
+    -------
+    dict
+        slots (list[dict]): 空き枠リスト
+        formatted (str): メール本文挿入用の整形文字列
+        error (str or None): エラーメッセージ（正常時は None）
+    """
+    from src.calendar_client import get_calendar_service, fetch_free_slots, format_slots_for_email
+
+    config = load_cli_config()
+    cal_cfg = config.get("calendar", {})
+
+    _days_ahead = cal_cfg.get("days_ahead", days_ahead)
+    _duration = cal_cfg.get("duration_minutes", duration_minutes)
+    _working_hours = (
+        cal_cfg.get("working_hours_start", 9),
+        cal_cfg.get("working_hours_end", 18),
+    )
+    _max_slots = cal_cfg.get("max_slots", 5)
+
+    try:
+        service = get_calendar_service()
+        slots = fetch_free_slots(
+            service,
+            days_ahead=_days_ahead,
+            duration_minutes=_duration,
+            working_hours=_working_hours,
+            max_slots=_max_slots,
+        )
+        formatted = format_slots_for_email(slots)
+        return {"slots": slots, "formatted": formatted, "error": None}
+    except FileNotFoundError as e:
+        return {"slots": [], "formatted": "", "error": str(e)}
+    except RuntimeError as e:
+        return {"slots": [], "formatted": "", "error": str(e)}
+    except Exception as e:
+        return {"slots": [], "formatted": "", "error": str(e)}
+
+
 def run_draft_to_gmail(
     results: Optional[List[Dict]] = None,
     output_csv_path: Optional[str] = None,

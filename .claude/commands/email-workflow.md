@@ -206,6 +206,84 @@ print('送信元会社名を設定しました:', cfg['sender_company'])
 
 #### 質問3: 候補日の入力（Q2 が "all" または "ab_only" の場合のみ）
 
+まず cli_config.yaml の calendar.enabled を確認し、Google Calendar 連携が有効な場合は自動取得を優先して案内する:
+
+```bash
+.venv/Scripts/python -c "
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+from src.cli_runner import load_cli_config
+cfg = load_cli_config()
+cal = cfg.get('calendar', {})
+print('calendar_enabled:', cal.get('enabled', True))
+"
+```
+
+**calendar_enabled が true の場合：** 以下の選択肢を提示する:
+
+```
+候補日の入力方法を選んでください:
+  [1] Google Calendar から空き時間を自動取得（推奨）
+  [2] 手動で入力する
+```
+
+**[1] を選択した場合（Google Calendar 自動取得）:**
+
+```bash
+.venv/Scripts/python -c "
+import sys, json
+sys.stdout.reconfigure(encoding='utf-8')
+from src.cli_runner import run_fetch_calendar_slots
+result = run_fetch_calendar_slots()
+if result['error']:
+    print('ERROR:', result['error'])
+else:
+    print(f'空き枠が {len(result[\"slots\"])} 件見つかりました:')
+    for i, s in enumerate(result['slots'], 1):
+        print(f'  {i}. {s[\"display\"]}')
+    print()
+    print('formatted:', result['formatted'])
+"
+```
+
+取得成功時（slots が1件以上）の場合:
+
+```
+以下の空き枠が見つかりました:
+  1. 5月20日（水）14:00〜15:00
+  2. 5月21日（木）10:00〜11:00
+  3. 5月22日（金）13:00〜14:00
+  4. 5月26日（月）15:00〜16:00
+  5. 5月27日（火）11:00〜12:00
+
+使用する枠を選んでください（例: 1,2,3 / すべて使う場合は Enter）:
+```
+
+ユーザーが番号を選択したら、選択された枠の `display` 値を結合してカスタム候補日テキストを組み立て、
+validate_candidate_dates() に渡せる形式（`YYYY/M/D HH:MM-HH:MM`）に変換してから検証する。
+変換できない場合は手動入力フローへフォールバックする。
+
+slots が0件の場合:
+
+```
+指定期間内に空き枠が見つかりませんでした。手動入力に切り替えます。
+```
+
+→ [2] 手動入力フローへ進む。
+
+エラーが発生した場合（Google Calendar API 未有効化など）:
+
+```
+Google Calendar への接続でエラーが発生しました:
+  （result["error"] の内容）
+
+手動入力に切り替えます。
+```
+
+→ [2] 手動入力フローへ進む。
+
+**[2] を選択した場合（手動入力）または calendar_enabled が false の場合:**
+
 以下のフォーマットで候補日を入力してもらう（改行区切り、時間帯はカンマ区切り）:
 
 ```
