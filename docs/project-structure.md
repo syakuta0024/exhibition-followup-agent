@@ -54,7 +54,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 
 | ファイル | 役割 |
 |---|---|
-| `cli_runner.py` | **Skillsと各モジュールをつなぐ唯一の橋渡し層**。`run_check()` / `run_build_kb()` / `run_generate()` / `run_draft_to_gmail()` の4関数を提供。すべての戻り値は `dict` に統一されている |
+| `cli_runner.py` | **Skillsと各モジュールをつなぐ唯一の橋渡し層**。`run_check()` / `run_build_kb()` / `run_generate()` / `run_draft_to_gmail()` / `run_kb_status()` / `run_rank_mapping()` / `run_fetch_calendar_slots()` / `run_setup_status()` 等を提供。すべての戻り値は `dict` に統一されている。`run_generate()` は `cli_config.yaml` の `crm_csv_path` から CRM DataFrame を、`output/audio_context.json` から音声コンテキストを自動読み込みし、`process_lead()` に渡す。リード識別キーは `build_lead_key(lead)` で算出する（lead_id 優先、無ければ `visitor_name_company_name` の複合キー） |
 | `agent.py` | **オーケストレーター**（`FollowUpAgent`）。1リード分の処理フロー全体（ランク推定→RAG→CRM照合→Web検索→メール生成）を調整する。LangChainのAgentは使わず、シンプルな関数呼び出しで実装 |
 | `config.py` | **設定・定数の一元管理**。モデル名・料金・CSVカラム候補名（`REQUIRED_FIELDS` / `OPTIONAL_FIELDS`。後者には `rep_name`〈スキャン担当者：音声紐づけ用〉と `follow_person`〈フォロー担当：将来拡張用〉を分離して保持）・ランク定義等。コードに直書きせずここに集約することで変更を一箇所で済ませる |
 
@@ -78,7 +78,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 
 | ファイル | 役割 |
 |---|---|
-| `rank_estimator.py` | 商談ランクの正規化と推定。「★5→A」等の変換はルールベース、変換できない場合はLLMが担当者コメント等からA〜Eを推定。`infer_rank_mapping_with_llm()` でランクフィールドのユニーク値リストを A〜E にマッピング推定 |
+| `rank_estimator.py` | 商談ランクの正規化と推定。「★5→A」・「A：決裁者商談→A」等の変換はルールベース（`normalize_rank()`）、変換できない場合はLLMが担当者コメント等からA〜Eを推定。`infer_rank_mapping_with_llm()` でランクフィールドのユニーク値リストを A〜E にマッピング推定。ランク正規化の優先順位: ①`rank_value_mapping` 保存値 → ②"X：説明"形式の自動抽出（`run_load_leads()` で実施）→ ③LLM推定 |
 | `crm_matcher.py` | 既存CRM CSVとリードをメール完全一致 + 社名ファジーマッチ（rapidfuzz）で照合。過去商談記録をメール生成のコンテキストに追加する |
 | `web_searcher.py` | DuckDuckGo（`ddgs`）で企業情報を2クエリ並走取得。クエリA: 事業内容・製品（期間制限なし）、クエリB: 最新ニュース（直近1ヶ月）|
 
@@ -95,7 +95,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 |---|---|
 | `gmail_drafter.py` | Gmail API（OAuth 2.0）で生成済みメールを下書き保存。初回のみブラウザ認証が必要。その後は `credentials/token.json` を自動利用 |
 | `calendar_client.py` | Google Calendar API で空き時間を取得する。`fetch_free_slots()` で平日・稼働時間内・予定重複なしの枠を返し、`format_slots_for_email()` でメール挿入用テキストに整形。Gmail と同じ `credentials/token.json` を使用 |
-| `utils.py` | CSV読み込み・カラムマッピング・ロガー・品質チェック等の汎用ヘルパー。各モジュールが共通で使う処理をここに集約 |
+| `utils.py` | CSV読み込み・カラムマッピング・ロガー・品質チェック等の汎用ヘルパー。各モジュールが共通で使う処理をここに集約。`load_crm_csv(path)` は CRM CSV を `CRM_REQUIRED_FIELDS / CRM_OPTIONAL_FIELDS` に従って標準形式の DataFrame に整形して返す（不在・空・破損時は None） |
 | `pdf_processor.py` | **VLM PDF テキスト化**。`extract_text_from_pdf_vlm()` で PyMuPDF + gpt-5.4-nano vision により PDF をページ画像化→Markdown テキスト抽出。`is_pdf()` で拡張子判定。`build_index()` から呼ばれる |
 
 ### KB 状態確認
@@ -125,6 +125,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 | `test_temperature_calibration.py` | `audio_processor.py` | 音声から抽出するtemperature（購買意欲）の判定閾値 |
 | `test_output_management.py` | `cli_runner.py` | 出力ファイルのパス管理（タイムスタンプ付きファイル名生成等） |
 | `test_calendar_client.py` | `calendar_client.py` | Google Calendar API のモック化テスト（空き枠検索・土日除外・working_hours 境界・busy 重複・2営業日ルール・format_slots_for_email） |
+| `test_cli_runner_context.py` | `cli_runner.py` / `utils.py` | `load_crm_csv`・`build_lead_key`・`load_audio_context` の単体テストと、`run_generate()` が `crm_csv_path` から CRM DataFrame、`output/audio_context.json` から音声コンテキストを読み込んで `process_lead()` に渡すかの配線テスト（process_lead はモック化） |
 
 ---
 
@@ -163,6 +164,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 | `output/emails.csv` | 最新の生成済みメールCSV（デフォルト出力先） |
 | `output/emails_YYYYMMDD_HHMMSS.csv` | タイムスタンプ付きバックアップ（`output_naming: timestamp` 設定時） |
 | `output/legacy/` | 旧バージョンの出力ファイル保管場所 |
+| `output/audio_context.json` | `/audio-matching` が書き、`/email-workflow`（`run_generate`）が読む音声中間ファイル。`{lead_key: {transcript, needs}}` の構造。`lead_key` は `cli_runner.build_lead_key()` で算出（lead_id 優先、無ければ `visitor_name_company_name` の複合キー）。複数回 `/audio-matching` を実行しても既存内容にマージされる |
 | `output/.gitkeep` | 空ディレクトリをGitで管理するためのプレースホルダ |
 
 ---
@@ -181,7 +183,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 
 | ファイル | 役割 |
 |---|---|
-| `cli_config.yaml` | **実行時設定ファイル**。`sender_company`（送信元会社名）・`sender_name`・`leads_csv_path`・`default_ranks`・`enable_web_search`・`enable_llm_judge`・`output_naming`・`calendar`（Google Calendar連携設定）等を管理。Skillsの対話で自動更新される |
+| `cli_config.yaml` | **実行時設定ファイル**。`sender_company`（送信元会社名）・`sender_name`・`leads_csv_path`・`crm_csv_path`（CRM CSV のパス。空ならスキップ）・`default_ranks`・`enable_web_search`・`enable_llm_judge`・`output_naming`・`rank_value_mapping`（`/rank-mapping` が保存するランク値正規化マッピング。`run_load_leads()` で適用される）・`calendar`（Google Calendar連携設定）等を管理。Skillsの対話で自動更新される |
 | `requirements.txt` | pip依存パッケージの一覧。`.venv/Scripts/pip install -r requirements.txt` でインストール |
 | `CLAUDE.md` | **Claude Codeへの指示書**。Skillsの呼び出し対応表・ビジネスロジックの呼び出し方・守るべきルール等をAIに伝える。Claude Codeはこのファイルを自動的に読む |
 | `README.md` | プロジェクト概要（外部公開向け）。採用担当者・初見の開発者が最初に読む |

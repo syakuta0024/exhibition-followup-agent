@@ -559,13 +559,9 @@ if __name__ == "__main__":
     lead = leads_df.iloc[0].to_dict()
 
     # CRM CSVの読み込みテスト
-    crm_df = None
-    crm_path = "data/crm_demo.csv"
-    if __import__("os").path.exists(crm_path):
-        from src.utils import auto_map_columns, apply_column_mapping
-        raw_crm = pd.read_csv(crm_path, dtype=str, encoding="utf-8-sig").fillna("")
-        mapping = auto_map_columns(list(raw_crm.columns), {**Config.CRM_REQUIRED_FIELDS, **Config.CRM_OPTIONAL_FIELDS})
-        crm_df = apply_column_mapping(raw_crm, mapping)
+    from src.utils import load_crm_csv
+    crm_df = load_crm_csv("data/crm_demo.csv")
+    if crm_df is not None:
         print(f"  CRM CSV読み込み: {len(crm_df)}件")
 
     print(f"  対象: {lead['visitor_name']} ({lead['company_name']}) / ランク {lead['lead_rank']}")

@@ -163,6 +163,61 @@ print(transcript[:500], '...' if len(transcript) > 500 else '')
 
 ---
 
+### Step 4.5: 音声コンテキストの永続化（自動）
+
+文字起こしが完了したリードについて、`output/audio_context.json` に追記する。
+このファイルは `/email-workflow` の `run_generate()` が自動で読み込み、
+各リードのメール生成時に最優先コンテキストとして使う。
+
+**lead_key の生成ロジックは `src/cli_runner.build_lead_key()` を必ず使うこと**
+（run_generate 側と完全一致させる必要があるため、ここでロジックを書き直さない）。
+
+```bash
+.venv/Scripts/python -c "
+import sys, json
+sys.stdout.reconfigure(encoding='utf-8')
+from pathlib import Path
+from src.cli_runner import build_lead_key, DEFAULT_AUDIO_CONTEXT_PATH
+
+# このスキル内で蓄積したリード辞書 → transcript/needs の対応を渡す
+# 例:
+#   entries = [
+#       {'lead': {'lead_id': 'L001', 'visitor_name': '田中 太郎', 'company_name': 'XYZ'},
+#        'transcript': '...全文...',
+#        'needs': {'summary': '...', 'issues': '...', 'needs': '...',
+#                  'budget': '...', 'decision_maker': '...', 'temperature': 'high'}},
+#   ]
+entries = []  # ← Step 2〜4 で得たリード+文字起こし結果に差し替える
+
+out_path = Path(DEFAULT_AUDIO_CONTEXT_PATH)
+out_path.parent.mkdir(parents=True, exist_ok=True)
+
+# 既存ファイルがあればマージ（複数回実行で消えないように）
+existing = {}
+if out_path.exists():
+    try:
+        existing = json.loads(out_path.read_text(encoding='utf-8')) or {}
+    except json.JSONDecodeError:
+        existing = {}
+
+for e in entries:
+    key = build_lead_key(e['lead'])
+    existing[key] = {
+        'transcript': e.get('transcript', '') or '',
+        'needs': e.get('needs') or {},
+    }
+
+out_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding='utf-8')
+print(f'audio_context.json を更新しました: {out_path} ({len(existing)} 件)')
+"
+```
+
+`needs` には `AudioProcessor.extract_needs()` の戻り値（`summary` / `issues` /
+`needs` / `budget` / `decision_maker` / `temperature` を含む dict）をそのまま入れる。
+`extract_needs` を呼ばずに文字起こしのみ取得した場合は `needs={}` で問題ない。
+
+---
+
 ### Step 5: 結果サマリー
 
 ```

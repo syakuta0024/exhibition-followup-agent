@@ -1,10 +1,21 @@
+calendar:
+  days_ahead: 14
+  duration_minutes: 60
+  enabled: true
+  max_slots: 5
+  working_hours_end: 18
+  working_hours_start: 9
+crm_csv_path: ''
 default_ranks:
 - A
 - B
 - C
+enable_llm_judge: false
 enable_rank_estimation: true
 enable_web_search: true
 leads_csv_path: data/leads.csv
+rank_value_mapping: {}
+output_naming: timestamp
 output_path: output/emails.csv
 product_urls:
   DigiMA: ''
@@ -13,15 +24,6 @@ product_urls:
   NTX-OCR: ''
   SmartVision: ''
   Sorani: ''
-sender_company: NSW株式会社
-sender_name: ゆうり
-enable_llm_judge: false
-output_naming: timestamp
-whisper_prompt: ""
-calendar:
-  enabled: true
-  days_ahead: 14
-  duration_minutes: 60
-  working_hours_start: 9
-  working_hours_end: 18
-  max_slots: 5
+sender_company: AA株式会社
+sender_name: 山田太郎
+whisper_prompt: ''

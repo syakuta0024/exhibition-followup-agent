@@ -27,6 +27,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
 from src.config import Config
+from src.utils import setup_logger
+
+logger = setup_logger(__name__)
 
 # BM25ライブラリをオプション依存として読み込む
 # インストールされていない場合はハイブリッド検索をスキップしてベクトル検索のみで動作する

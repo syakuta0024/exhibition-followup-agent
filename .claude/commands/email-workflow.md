@@ -35,6 +35,22 @@ leads_path = cfg.get('leads_csv_path', 'data/leads.csv')
 label = 'カスタム' if leads_path != 'data/leads.csv' else 'デフォルト'
 print(f'■ リードCSV:    {leads_path}（{label}）')
 
+crm_path = cfg.get('crm_csv_path', '')
+if crm_path:
+    from pathlib import Path
+    exists = Path(crm_path).exists()
+    state = '存在' if exists else '※ ファイル未発見'
+    print(f'■ CRM CSV:      {crm_path}（{state}）')
+else:
+    print('■ CRM CSV:      未設定（vectordb の Markdown CRM 検索にフォールバック）')
+
+from pathlib import Path as _P
+audio_ctx = _P('output/audio_context.json')
+if audio_ctx.exists():
+    print(f'■ 音声コンテキスト: {audio_ctx}（読み込み対象）')
+else:
+    print('■ 音声コンテキスト: なし（/audio-matching を実行すると自動生成されます）')
+
 output_path = cfg.get('output_path', 'output/emails.csv')
 label2 = 'カスタム' if output_path != 'output/emails.csv' else 'デフォルト'
 print(f'■ 出力先:       {output_path}（{label2}）')
@@ -430,8 +446,20 @@ if result['errors'] > 0:
 通信環境が悪い場合は `enable_web_search=False` に変更して実行。
 
 ### 音声コンテキストを含める
-事前に `/audio-matching` で紐づけと文字起こしを完了させておくこと。
-文字起こしが完了していると `run_generate()` がそれを自動参照する（Skills 版では `transcript` を手動で引数に渡す必要がある）。
+事前に `/audio-matching` を実行しておくと、結果が `output/audio_context.json` に
+保存され、`/email-workflow`（`run_generate()`）が自動的に読み込んでメール生成の
+最優先コンテキストとして反映する。手動で引数を渡す必要はない。
+
+`lead_key` は `src/cli_runner.build_lead_key(lead)` で算出される（lead_id 優先、
+無ければ `visitor_name_company_name` の複合キー）。`/audio-matching` 側の保存
+スクリプトも同じ関数を使うため、両者の紐づけは自動的に整合する。
+
+### CRM CSV を併用する
+`cli_config.yaml` の `crm_csv_path` に CRM CSV のパスを設定すると、
+`run_generate()` が起動時に `load_crm_csv()` で読み込み、各リードに対して
+メール完全一致 + 社名ファジーマッチ（rapidfuzz）で紐づける。
+未設定（空文字）の場合は `data/crm_records/*.md` を対象にした vectordb 検索に
+フォールバックする。
 
 ---
 

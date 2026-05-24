@@ -5,7 +5,9 @@ Skills / CLI 共通ビジネスロジック層。
 戻り値はすべて dict で統一し、呼び出し側でフォーマットする。
 """
 
+import json
 import os
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 import yaml
 
 CONFIG_PATH = Path("cli_config.yaml")
+DEFAULT_AUDIO_CONTEXT_PATH = "output/audio_context.json"
 DEFAULT_CONFIG: Dict[str, Any] = {
     "sender_company": "",
     "sender_name": "",
@@ -22,6 +25,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_rank_estimation": True,
     "output_path": "output/emails.csv",
     "leads_csv_path": "data/leads.csv",
+    "crm_csv_path": "",
+    "rank_value_mapping": {},
     "product_urls": {
         "EdgeGuard": "",
         "DigiMA": "",
@@ -31,6 +36,40 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "SmartVision": "",
     },
 }
+
+
+def build_lead_key(lead: Dict[str, Any]) -> str:
+    """音声コンテキスト / 外部マッピング用のリード識別キーを返す。
+
+    lead_id があればそれを優先、空なら "visitor_name_company_name" の複合キー。
+    run_generate と /audio-matching の保存スクリプトで必ず同じ関数を使うこと。
+    """
+    lid = str(lead.get("lead_id") or "").strip()
+    if lid:
+        return lid
+    visitor = str(lead.get("visitor_name", "") or "").strip()
+    company = str(lead.get("company_name", "") or "").strip()
+    return f"{visitor}_{company}"
+
+
+def load_audio_context(path: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    """audio_context.json を読み込んで {lead_key: {transcript, needs}} を返す。
+
+    ファイルが存在しない / 壊れている場合は空 dict を返す（クラッシュしない）。
+    """
+    if not path:
+        return {}
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def load_cli_config() -> Dict[str, Any]:
@@ -288,6 +327,23 @@ def run_load_leads(
     mapping = auto_map_columns(df.columns.tolist(), all_fields)
     df = apply_column_mapping(df, mapping)
 
+    # ランク値正規化: ①保存済みマッピング優先 → ②"X：説明"形式の自動抽出 → ③RankEstimatorへ委ねる
+    if "lead_rank" in df.columns:
+        rank_mapping = config.get("rank_value_mapping") or {}
+        if rank_mapping:
+            df["lead_rank"] = df["lead_rank"].apply(
+                lambda v: rank_mapping.get(str(v).strip(), str(v).strip())
+            )
+        else:
+            _auto_pat = re.compile(r"^([A-Ea-e])[：:\s]")
+
+            def _auto_normalize(v, pat=_auto_pat):
+                s = str(v).strip()
+                m = pat.match(s)
+                return m.group(1).upper() if m else s
+
+            df["lead_rank"] = df["lead_rank"].apply(_auto_normalize)
+
     target_ranks = ranks or config.get("default_ranks", ["A", "B", "C"])
     filtered = filter_leads_by_rank(df, target_ranks)
 
@@ -349,6 +405,8 @@ def run_generate(
     candidate_dates: Optional[List[Dict]] = None,
     schedule_policy: str = "ab_only",
     enable_llm_judge: Optional[bool] = None,
+    crm_csv_path: Optional[str] = None,
+    audio_context_path: Optional[str] = DEFAULT_AUDIO_CONTEXT_PATH,
 ) -> Dict[str, Any]:
     """
     展示会リードのフォローアップメールを一括生成して CSV に保存する。
@@ -368,7 +426,7 @@ def run_generate(
     from src.vectordb import VectorDBManager
     from src.email_generator import EmailGenerator
     from src.agent import FollowUpAgent
-    from src.utils import save_results_to_csv
+    from src.utils import save_results_to_csv, load_crm_csv
 
     try:
         Config.validate()
@@ -391,6 +449,13 @@ def run_generate(
         _output = _manage_output_path(_output_naming, _canonical)
     _ranks = ranks or config.get("default_ranks", ["A", "B", "C"])
     _product_urls = config.get("product_urls", {})
+
+    # CRM CSV を読み込む（引数 > config > スキップ）
+    _crm_path = crm_csv_path if crm_csv_path is not None else config.get("crm_csv_path", "")
+    crm_df = load_crm_csv(_crm_path) if _crm_path else None
+
+    # 音声コンテキストを読み込む（無ければ空 dict）
+    audio_context_map = load_audio_context(audio_context_path)
 
     exhibition_info = {
         "exhibition_name": exhibition_name or "",
@@ -431,14 +496,19 @@ def run_generate(
 
     for i, (idx, row) in enumerate(leads_df.iterrows()):
         lead = row.to_dict()
+        lead_key = build_lead_key(lead)
+        ctx = audio_context_map.get(lead_key, {})
         try:
             result = agent.process_lead(
                 lead=lead,
+                crm_df=crm_df,
                 sender_company=_sender,
                 sender_name=_sender_name,
                 enable_web_search=_web,
                 enable_rank_estimation=_rank_est,
                 exhibition_info=exhibition_info,
+                transcript=ctx.get("transcript", "") or "",
+                extracted_needs=ctx.get("needs"),
                 product_urls=_product_urls,
                 candidate_dates=candidate_dates,
                 schedule_policy=schedule_policy,

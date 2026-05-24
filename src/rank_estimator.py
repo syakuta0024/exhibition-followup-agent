@@ -97,6 +97,11 @@ class RankEstimator:
         if cleaned.upper() in ("A", "B", "C", "D", "E"):
             return cleaned.upper()
 
+        # "A：決裁者商談" 形式: 先頭1文字がランク文字なら採用（入口正規化の二重保険）
+        m = re.match(r"^([A-Ea-e])[：:\s]", cleaned)
+        if m:
+            return m.group(1).upper()
+
         # ★☆を除去して数値に変換
         cleaned = cleaned.replace("★", "").replace("☆", "").strip()
         try:

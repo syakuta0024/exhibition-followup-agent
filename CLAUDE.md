@@ -133,6 +133,20 @@ else:
 - KB 未構築の状態で `run_generate()` を実行しない（`run_check()` で確認してから）
 - 出力ファイルは `output/emails.csv`（デフォルト）に保存される
 - Gmail 下書き機能は `credentials/credentials.json` が必要（初回のみブラウザ認証）
+- **ランク値正規化の優先順位**（`run_load_leads()` 内で CSV 読み込み直後に実施）:
+  1. `cli_config.yaml` の `rank_value_mapping`（`/rank-mapping` で保存した明示マッピング）
+  2. `"X：説明"` 形式の自動抽出（先頭1文字が A〜E かつ `[：:\s]` が続くパターン）
+  3. `RankEstimator` の LLM 推定（上記で変換できない未知形式のみ。API コスト発生）
+  `filter_leads_by_rank()` は**完全一致**で動作するため、未正規化値は除外される
+- **音声コンテキストの受け渡し**: `/audio-matching` が `output/audio_context.json` を
+  生成し、`/email-workflow`（`run_generate()`）が起動時に自動読み込みする。
+  リード識別キーは `cli_runner.build_lead_key(lead)` で算出（lead_id 優先、
+  無ければ `visitor_name_company_name` の複合キー）。両 Skill とも同じ関数を
+  使うので独自に手で組み立てないこと。
+- **CRM CSV 連携**: `cli_config.yaml` の `crm_csv_path` にパスを設定すると
+  `run_generate()` が `utils.load_crm_csv()` で読み込み、各リードにファジーマッチ
+  紐づけを行う。空文字（デフォルト）の場合は `data/crm_records/*.md` を対象に
+  した vectordb 検索にフォールバックする。
 
 ### Skills 共通の対話ルール
 
@@ -180,8 +194,9 @@ pip install some-package
 
 ```
 exhibition-followup-agent/
-├── cli_config.yaml         # 設定（sender_company・ランク・パスなど）
-├── output/                 # メール生成結果CSV（output/emails.csv）
+├── cli_config.yaml         # 設定（sender_company・ランク・パス・crm_csv_path など）
+├── output/                 # メール生成結果CSV（output/emails.csv）と中間ファイル
+│   └── audio_context.json  # /audio-matching が書き、/email-workflow が読む音声中間ファイル
 ├── credentials/            # Gmail OAuth 認証情報（.gitignore 対象）
 │   ├── credentials.json    # Google Cloud からダウンロード（コミット禁止）
 │   └── token.json          # 初回認証後に自動生成（コミット禁止）
@@ -207,8 +222,8 @@ exhibition-followup-agent/
 │   ├── audio_matcher.py    # ファイル名解析 + リード紐づけエンジン（AudioMatcher）
 │   ├── gmail_drafter.py    # Gmail API で下書き作成（GmailDrafter）
 │   ├── calendar_client.py  # Google Calendar API で空き時間取得（fetch_free_slots / format_slots_for_email）
-│   ├── cli_runner.py       # Skills共通ビジネスロジック（run_check/build_kb/generate/draft/kb_status/fetch_calendar_slots）
-│   └── utils.py            # ロガー・品質チェック等ユーティリティ
+│   ├── cli_runner.py       # Skills共通ビジネスロジック（run_check/build_kb/generate/draft/kb_status/fetch_calendar_slots、build_lead_key・load_audio_context も）
+│   └── utils.py            # ロガー・品質チェック・load_crm_csv 等ユーティリティ
 ├── data/
 │   ├── leads.csv           # リードデータ（入力）
 │   ├── tech_documents/     # 製品技術資料（.md と .pdf を配置する。PDF は VLM でテキスト化）

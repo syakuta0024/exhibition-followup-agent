@@ -103,9 +103,8 @@ def filter_leads_by_rank(df: pd.DataFrame, ranks: List[str]) -> pd.DataFrame:
     if not ranks:
         return df
 
-    # 大文字に統一して比較
-    upper_ranks = [r.upper() for r in ranks]
-    return df[df["lead_rank"].str.upper().isin(upper_ranks)]
+    upper_ranks = [r.strip().upper() for r in ranks]
+    return df[df["lead_rank"].str.strip().str.upper().isin(upper_ranks)]
 
 
 def parse_interested_products(products_str: str) -> List[str]:
@@ -397,6 +396,38 @@ def normalize_rank_values(leads: list, rank_field: str, mapping: dict) -> list:
             new_lead[rank_field] = mapping[val]
         result.append(new_lead)
     return result
+
+
+def load_crm_csv(path: str) -> Optional[pd.DataFrame]:
+    """
+    CRM CSV を読み込み、auto_map_columns + apply_column_mapping で
+    標準形式の DataFrame に整形して返す。
+
+    Parameters
+    ----------
+    path : str
+        CRM CSV のファイルパス。空文字や None 相当はスキップ。
+
+    Returns
+    -------
+    Optional[pd.DataFrame]
+        ファイルが存在しない / 空 / 読み込み失敗の場合は None。
+        正常時は CRM_REQUIRED_FIELDS + CRM_OPTIONAL_FIELDS に従って
+        標準フィールド名にリネーム済みの DataFrame。
+    """
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        raw_df = pd.read_csv(path, encoding="utf-8-sig", dtype=str).fillna("")
+    except Exception:
+        return None
+    if raw_df.empty:
+        return None
+
+    from src.config import Config
+    crm_fields = {**Config.CRM_REQUIRED_FIELDS, **Config.CRM_OPTIONAL_FIELDS}
+    mapping = auto_map_columns(list(raw_df.columns), crm_fields)
+    return apply_column_mapping(raw_df, mapping)
 
 
 def save_results_to_csv(results: List[Dict], output_path: str) -> None:
