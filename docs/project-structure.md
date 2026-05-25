@@ -140,9 +140,12 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 | `data/crm_hubspot_demo.csv` | HubSpot形式のCRMデモ用サンプル |
 | `data/leads_rx_demo.csv` | RX Japan Lead Manager形式のデモ用リードCSV |
 | `data/test/*.csv` | 自動テスト専用のフィクスチャCSV（英語列・日本語列・欠損列・音声テスト用等） |
+| `data/test/audio/` | 音声テスト用ディレクトリ（**コミット対象外**）。`.gitkeep` のみ管理。音声ファイルは各自で配置する |
+| `test_m4a音声データ/` | 旧音声テスト用ディレクトリ（**コミット対象外**）。`.gitignore` で除外済み |
 
 > **運用**: `data/tech_documents/` と `data/crm_records/` は「ユーザーが自社ファイルを置く場所」。  
 > デモ用ファイルと自社ファイルを混在させないこと。
+> 音声ファイル（`.m4a` / `.mp3` / `.wav`）は個人情報を含む可能性があるため `.gitignore` で除外している。
 
 ---
 

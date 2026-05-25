@@ -40,3 +40,11 @@ _review_data.json
 
 # デモ用技術資料PDF（自社データは含めない）
 data/tech_documents/*.pdf
+
+# 音声ファイル（個人情報を含む可能性があるためコミットしない）
+*.m4a
+*.mp3
+*.wav
+test_m4a音声データ/
+data/test/audio/*
+!data/test/audio/.gitkeep

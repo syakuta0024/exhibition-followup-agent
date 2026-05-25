@@ -149,7 +149,7 @@ from src.config import Config
 
 processor = AudioProcessor(api_key=Config.OPENAI_API_KEY, llm=None)
 
-audio_path = 'test_m4a/音声データ/営業A_002.mp3'  # 対象ファイルに置き換える
+audio_path = '<AUDIO_DIR>/営業A_002.mp3'  # Step0 で確認したフォルダパス + ファイル名に置き換える
 with open(audio_path, 'rb') as f:
     file_bytes = f.read()
 

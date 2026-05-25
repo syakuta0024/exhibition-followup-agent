@@ -141,6 +141,8 @@ claude
 
 > **Gmail 下書き機能を使う場合**: Google Cloud Console で OAuth クライアント ID を作成し、`credentials/credentials.json` として配置する。詳細は `/setup` の Step 7 で案内される。
 
+> **音声機能を使う場合**: 音声ファイル（`.m4a` / `.mp3` / `.wav`）は個人情報を含む可能性があるため、リポジトリには含まれていない。展示会で収録した音声ファイルを `data/test/audio/` 等の任意のディレクトリに配置し、`/audio-matching` Skill でフォルダパスを指定して使用する。
+
 ---
 
 ## 主な Skill
