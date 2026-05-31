@@ -17,6 +17,7 @@ import yaml
 
 CONFIG_PATH = Path("cli_config.yaml")
 DEFAULT_AUDIO_CONTEXT_PATH = "output/audio_context.json"
+LAST_RUN_PROFILE_PATH = "profiles/last_run.yaml"
 DEFAULT_CONFIG: Dict[str, Any] = {
     "sender_company": "",
     "sender_name": "",
@@ -70,6 +71,44 @@ def load_audio_context(path: Optional[str]) -> Dict[str, Dict[str, Any]]:
         return data
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def save_last_run_profile(params: dict) -> None:
+    """
+    run_generate() 完了後に使用パラメータを profiles/last_run.yaml に保存する。
+
+    保存するキー: exhibition_name, exhibition_date, exhibition_venue,
+                   ranks, schedule_policy, candidate_dates, saved_at (ISO形式)
+    """
+    profile = {
+        "exhibition_name":  params.get("exhibition_name", ""),
+        "exhibition_date":  params.get("exhibition_date", ""),
+        "exhibition_venue": params.get("exhibition_venue", ""),
+        "ranks":            params.get("ranks", []),
+        "schedule_policy":  params.get("schedule_policy", "ab_only"),
+        "candidate_dates":  params.get("candidate_dates"),
+        "saved_at":         datetime.now().isoformat(),
+    }
+    profile_path = Path(LAST_RUN_PROFILE_PATH)
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(profile_path, "w", encoding="utf-8") as f:
+        yaml.dump(profile, f, allow_unicode=True, default_flow_style=False)
+
+
+def load_last_run_profile() -> Optional[Dict[str, Any]]:
+    """
+    profiles/last_run.yaml が存在すれば読み込んで返す。
+    存在しない場合は None を返す（クラッシュしない）。
+    """
+    p = Path(LAST_RUN_PROFILE_PATH)
+    if not p.exists():
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, yaml.YAMLError):
+        return None
 
 
 def load_cli_config() -> Dict[str, Any]:
@@ -449,6 +488,7 @@ def run_generate(
         _output = _manage_output_path(_output_naming, _canonical)
     _ranks = ranks or config.get("default_ranks", ["A", "B", "C"])
     _product_urls = config.get("product_urls", {})
+    _known_products = set(config.get("known_products", []))
 
     # CRM CSV を読み込む（引数 > config > スキップ）
     _crm_path = crm_csv_path if crm_csv_path is not None else config.get("crm_csv_path", "")
@@ -513,6 +553,7 @@ def run_generate(
                 candidate_dates=candidate_dates,
                 schedule_policy=schedule_policy,
                 enable_llm_judge=_judge,
+                known_products=_known_products,
             )
             results.append(result)
         except Exception as e:
@@ -531,6 +572,16 @@ def run_generate(
             on_progress(i + 1, total, results[-1])
 
     save_results_to_csv(results, _output)
+
+    if error_count == 0:
+        save_last_run_profile({
+            "exhibition_name":  exhibition_name or "",
+            "exhibition_date":  exhibition_date or "",
+            "exhibition_venue": exhibition_venue or "",
+            "ranks":            _ranks,
+            "schedule_policy":  schedule_policy,
+            "candidate_dates":  candidate_dates,
+        })
 
     return {
         "ok": True,

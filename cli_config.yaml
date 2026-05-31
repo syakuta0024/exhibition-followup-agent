@@ -10,7 +10,7 @@ default_ranks:
 - A
 - B
 - C
-enable_llm_judge: false
+enable_llm_judge: true  # Layer 2 (LLM-as-a-Judge) を有効化。論理矛盾・文脈逸脱を自動検出
 enable_rank_estimation: true
 enable_web_search: true
 leads_csv_path: data/leads.csv
@@ -27,3 +27,11 @@ product_urls:
 sender_company: AA株式会社
 sender_name: 山田太郎
 whisper_prompt: ''
+# 関心外製品チェックに使う製品名リスト（自社製品名に書き換えてください）
+known_products:
+  - DigiMA
+  - EdgeGuard
+  - FactoryBrain
+  - NTX-OCR
+  - SmartVision
+  - Sorani

@@ -181,6 +181,50 @@ print('送信元会社名を設定しました:', cfg['sender_company'])
 
 ### Step 5: 展示会情報の確認
 
+まず前回の処理プロファイルが存在するか確認する:
+
+```bash
+.venv/Scripts/python -c "
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+from src.cli_runner import load_last_run_profile
+profile = load_last_run_profile()
+if profile:
+    print('profile_found: true')
+    print(f'exhibition_name: {profile.get(\"exhibition_name\", \"\")}')
+    print(f'exhibition_date: {profile.get(\"exhibition_date\", \"\")}')
+    print(f'exhibition_venue: {profile.get(\"exhibition_venue\", \"\")}')
+    print(f'ranks: {profile.get(\"ranks\", [])}')
+    print(f'schedule_policy: {profile.get(\"schedule_policy\", \"\")}')
+    print(f'saved_at: {profile.get(\"saved_at\", \"\")}')
+else:
+    print('profile_found: false')
+"
+```
+
+**profile_found が true の場合**:
+
+```
+前回の設定が見つかりました:
+
+  展示会名: {exhibition_name}
+  開催日:   {exhibition_date}
+  会場:     {exhibition_venue}
+  対象ランク: {ranks}
+  候補日ポリシー: {schedule_policy}
+  保存日時: {saved_at}
+
+この設定を引き継ぎますか？
+
+[1] 引き継ぐ（候補日だけ再入力）
+[2] 最初から入力する
+```
+
+- **[1] を選んだ場合**: プロファイルの展示会名・ランク・ポリシーをそのまま使用し、Step 5.5 の候補日入力（質問3）のみ行ってから Step 6 へ進む（質問1・質問2はスキップ）
+- **[2] を選んだ場合**: 通常の入力フロー（下記）へ進む
+
+**profile_found が false の場合（またはユーザーが [2] を選んだ場合）**:
+
 「展示会名・開催日・会場を教えてください（任意ですが、メールの品質が向上します）」と確認する。
 
 例：

@@ -41,6 +41,9 @@ _review_data.json
 # デモ用技術資料PDF（自社データは含めない）
 data/tech_documents/*.pdf
 
+# 処理プロファイル（実行時データのためコミットしない）
+profiles/last_run.yaml
+
 # 音声ファイル（個人情報を含む可能性があるためコミットしない）
 *.m4a
 *.mp3

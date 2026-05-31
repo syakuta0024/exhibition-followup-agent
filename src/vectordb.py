@@ -42,17 +42,20 @@ except ImportError:
 
 # ---------------------------------------------------------------
 # ファイル名 → 製品名・カテゴリのマッピング
+# ユーザー設定: 自社製品のファイル名とカテゴリをここに記述してください。
+# キー = data/tech_documents/ 内の .md / .pdf ファイル名（拡張子なし）
+# 未知のファイル名は "不明（その他）" にフォールバックします。
 # ---------------------------------------------------------------
 PRODUCT_NAME_MAP: Dict[str, str] = {
-    "sorani_iot_platform": "Sorani",
-    "digima_digital_twin": "DigiMA",
+    "sorani_iot_platform": "Sorani",        # ← 自社製品名に書き換えてください
+    "digima_digital_twin": "DigiMA",        # ← 自社製品名に書き換えてください
     "smartvision_smart_glass": "SmartVision",
     "ntx_ocr": "NTX-OCR",
     "factorybrain_production": "FactoryBrain",
     "edgeguard_anomaly": "EdgeGuard",
 }
 
-# 製品カテゴリのマッピング
+# 製品カテゴリのマッピング（自社製品に合わせて書き換えてください）
 PRODUCT_CATEGORY_MAP: Dict[str, str] = {
     "sorani_iot_platform": "IoT",
     "digima_digital_twin": "デジタルツイン",
@@ -62,7 +65,7 @@ PRODUCT_CATEGORY_MAP: Dict[str, str] = {
     "edgeguard_anomaly": "異常検知",
 }
 
-# 製品ごとの対象業種（テキストから自動推定する代わりの既知データ）
+# 製品ごとの対象業種（自社製品に合わせて書き換えてください）
 PRODUCT_TARGET_INDUSTRIES_MAP: Dict[str, str] = {
     "sorani_iot_platform": "製造業,食品,化学,自動車部品",
     "digima_digital_twin": "製造業,自動車,電子機器,重工業",

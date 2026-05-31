@@ -71,6 +71,7 @@ class FollowUpAgent:
         candidate_dates: Optional[List[Dict]] = None,
         schedule_policy: str = "ab_only",
         enable_llm_judge: bool = False,
+        known_products: Optional[set] = None,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -251,7 +252,8 @@ class FollowUpAgent:
         # ── Step 6.5: Python 機械チェック（Layer 1 検証） ──────────────
         from src.email_validator import validate_email
         validation = validate_email(
-            email.get("subject", ""), email.get("body", ""), lead, product_urls
+            email.get("subject", ""), email.get("body", ""), lead, product_urls,
+            known_products=known_products,
         )
         if not validation.passed:
             logger.warning(f"  検証エラー: {validation.errors}")

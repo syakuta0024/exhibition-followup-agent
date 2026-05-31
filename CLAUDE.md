@@ -127,6 +127,24 @@ else:
 "
 ```
 
+# 処理プロファイルの保存・読み込み（§3.13）
+.venv/Scripts/python -c "
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+from src.cli_runner import load_last_run_profile, save_last_run_profile
+
+# 読み込み（前回のプロファイルが存在する場合のみ内容を返す）
+profile = load_last_run_profile()
+if profile:
+    print('profile_found: true')
+    print(f'exhibition_name: {profile[\"exhibition_name\"]}')
+    print(f'ranks: {profile[\"ranks\"]}')
+    print(f'saved_at: {profile[\"saved_at\"]}')
+else:
+    print('profile_found: false')
+"
+```
+
 ### 注意事項（Claude Code が守るルール）
 
 - **プロジェクトルートから実行**すること（相対パスが壊れる）
@@ -228,6 +246,8 @@ exhibition-followup-agent/
 │   ├── leads.csv           # リードデータ（入力）
 │   ├── tech_documents/     # 製品技術資料（.md と .pdf を配置する。PDF は VLM でテキスト化）
 │   └── crm_records/        # 商談記録 Markdown（空ディレクトリ。自社MDを配置する）
+├── profiles/               # 処理プロファイル（Gitで管理、last_run.yaml は .gitignore 対象）
+│   └── last_run.yaml       # run_generate() 成功時に自動保存。/email-workflow Step 5 で再利用
 ├── chroma_db/              # ChromaDB永続化ディレクトリ
 │   └── parent_store.json   # 親チャンクのテキスト保存（親子チャンク用）
 ├── system_overview.md      # システム全体説明資料（背景・アーキテクチャ・使い方）

@@ -15,6 +15,7 @@ exhibition-followup-agent/
 ├── data/                   # 入力データ（リードCSV・製品資料・CRMデモ）
 ├── docs/                   # 設計ドキュメント
 ├── output/                 # 生成済みメールCSV（実行結果）
+├── profiles/               # 処理プロファイル（last_run.yaml はコミット対象外）
 ├── credentials/            # Gmail OAuth認証情報（コミット対象外）
 ├── chroma_db/              # ChromaDB永続化データ（実行時自動生成）
 ├── .venv/                  # Python仮想環境（Gitでは管理しない）
@@ -54,7 +55,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 
 | ファイル | 役割 |
 |---|---|
-| `cli_runner.py` | **Skillsと各モジュールをつなぐ唯一の橋渡し層**。`run_check()` / `run_build_kb()` / `run_generate()` / `run_draft_to_gmail()` / `run_kb_status()` / `run_rank_mapping()` / `run_fetch_calendar_slots()` / `run_setup_status()` 等を提供。すべての戻り値は `dict` に統一されている。`run_generate()` は `cli_config.yaml` の `crm_csv_path` から CRM DataFrame を、`output/audio_context.json` から音声コンテキストを自動読み込みし、`process_lead()` に渡す。リード識別キーは `build_lead_key(lead)` で算出する（lead_id 優先、無ければ `visitor_name_company_name` の複合キー） |
+| `cli_runner.py` | **Skillsと各モジュールをつなぐ唯一の橋渡し層**。`run_check()` / `run_build_kb()` / `run_generate()` / `run_draft_to_gmail()` / `run_kb_status()` / `run_rank_mapping()` / `run_fetch_calendar_slots()` / `run_setup_status()` / `save_last_run_profile()` / `load_last_run_profile()` 等を提供。すべての戻り値は `dict` に統一されている。`run_generate()` は `cli_config.yaml` の `crm_csv_path` から CRM DataFrame を、`output/audio_context.json` から音声コンテキストを自動読み込みし、`process_lead()` に渡す。リード識別キーは `build_lead_key(lead)` で算出する（lead_id 優先、無ければ `visitor_name_company_name` の複合キー）。エラー0件で完了した際は `save_last_run_profile()` でプロファイルを `profiles/last_run.yaml` に保存する |
 | `agent.py` | **オーケストレーター**（`FollowUpAgent`）。1リード分の処理フロー全体（ランク推定→RAG→CRM照合→Web検索→メール生成）を調整する。LangChainのAgentは使わず、シンプルな関数呼び出しで実装 |
 | `config.py` | **設定・定数の一元管理**。モデル名・料金・CSVカラム候補名（`REQUIRED_FIELDS` / `OPTIONAL_FIELDS`。後者には `rep_name`〈スキャン担当者：音声紐づけ用〉と `follow_person`〈フォロー担当：将来拡張用〉を分離して保持）・ランク定義等。コードに直書きせずここに集約することで変更を一箇所で済ませる |
 
@@ -110,7 +111,8 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 
 | ファイル | テスト対象 | 内容 |
 |---|---|---|
-| `test_email_validator.py` | `email_validator.py` | Layer 1の4ルール（プレースホルダ・ダミーURL・関心外製品等）の正常系・異常系 |
+| `test_email_validator.py` | `email_validator.py` | Layer 1の5ルール（プレースホルダ・ダミーURL・関心外製品・多製品言及等）の正常系・異常系 |
+| `test_profile.py` | `cli_runner.py` | `save_last_run_profile()` / `load_last_run_profile()` の保存・読み込み・ISO形式・失敗時の未保存の5ケース |
 | `test_email_judge.py` | `email_judge.py` | Layer 2（LLM-as-a-Judge）のスコアリング・合否判定ロジック |
 | `test_3layer_integration.py` | `agent.py` 経由の統合 | Layer 1→Layer 2→出力の連鎖動作。ハルシネーション検出の回帰防止 |
 | `test_email_generator_prompt_routing.py` | `email_generator.py` | ランク別プロンプトテンプレートの切り替えロジック |
