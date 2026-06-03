@@ -24,8 +24,8 @@ product_urls:
   NTX-OCR: ''
   SmartVision: ''
   Sorani: ''
-sender_company: AA株式会社
-sender_name: 山田太郎
+sender_company: ''
+sender_name: ''
 whisper_prompt: ''
 # 関心外製品チェックに使う製品名リスト（自社製品名に書き換えてください）
 known_products:
