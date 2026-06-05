@@ -190,6 +190,7 @@ class EmailGenerator:
         audio_context: str = "",
         product_urls: Optional[Dict[str, str]] = None,
         schedule_context: str = "",
+        product_card_context: str = "",
     ) -> Dict[str, str]:
         """
         フォローアップメールを生成する。
@@ -226,6 +227,7 @@ class EmailGenerator:
             crm_structured=crm_structured, exhibition_info=exhibition_info,
             web_context=web_context, audio_context=audio_context,
             sender_company=sender_company, sender_name=sender_name, product_urls=product_urls,
+            product_card_context=product_card_context,
         )
         if schedule_context.strip():
             human_prompt = self._build_human_prompt_with_schedule(
@@ -292,6 +294,7 @@ class EmailGenerator:
         web_context: str,
         audio_context: str,
         schedule_context: str = "",
+        product_card_context: str = "",
     ) -> str:
         """共通のコンテキストセクションを組み立てて返す。
         schedule_context を渡さない呼び出しでは面談候補日は含まれない。"""
@@ -317,6 +320,16 @@ class EmailGenerator:
             crm_section = "\n".join(lines) + "\n"
         elif crm_context.strip():
             crm_section = f"## 過去のCRM商談履歴（参考）\n{crm_context}\n"
+
+        # ── 製品カードセクション（human-verified、技術資料より優先） ───────
+        product_card_section = ""
+        if product_card_context.strip():
+            product_card_section = (
+                "## ★製品情報（人間確認済み）\n"
+                "※ 以下は確認済みの正確な製品情報です。\n"
+                "  技術資料(RAG)と矛盾する場合はこちらを優先してください。\n"
+                f"{product_card_context}\n"
+            )
 
         # ── 技術資料セクション ───────────────────────────────────
         tech_section = ""
@@ -370,7 +383,7 @@ class EmailGenerator:
 
         joined = "\n".join(
             s for s in [audio_section, exhibition_section, schedule_section,
-                        extra_section, crm_section, tech_section, web_section]
+                        extra_section, crm_section, product_card_section, tech_section, web_section]
             if s.strip()
         )
         return ("\n" + joined) if joined else ""
@@ -389,6 +402,7 @@ class EmailGenerator:
         sender_name: str = "",
         product_urls: Optional[Dict[str, str]] = None,
         schedule_context: str = "",
+        product_card_context: str = "",
     ) -> str:
         """候補日3つを提示する A/B 向けプロンプト構築。"""
         products = parse_interested_products(str(lead.get("interested_products", "")))
@@ -396,6 +410,7 @@ class EmailGenerator:
         context_sections = self._assemble_context_sections(
             lead, tech_context, crm_context, crm_structured, exhibition_info,
             web_context, audio_context, schedule_context=schedule_context,
+            product_card_context=product_card_context,
         )
         schedule_structure = (
             "\n## メール構成（この顧客は候補日提示型として扱う）\n"
@@ -438,6 +453,7 @@ class EmailGenerator:
         sender_company: str = "",
         sender_name: str = "",
         product_urls: Optional[Dict[str, str]] = None,
+        product_card_context: str = "",
     ) -> str:
         """候補日提示なし・情報提供型（C/D/E）向けプロンプト構築。"""
         products = parse_interested_products(str(lead.get("interested_products", "")))
@@ -445,7 +461,7 @@ class EmailGenerator:
         # schedule_context を渡さない → schedule_section は空
         context_sections = self._assemble_context_sections(
             lead, tech_context, crm_context, crm_structured, exhibition_info,
-            web_context, audio_context,
+            web_context, audio_context, product_card_context=product_card_context,
         )
         info_structure = (
             "\n## メール構成（この顧客は情報提供型として扱う）\n"

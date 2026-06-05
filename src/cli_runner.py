@@ -18,6 +18,7 @@ import yaml
 CONFIG_PATH = Path("cli_config.yaml")
 DEFAULT_AUDIO_CONTEXT_PATH = "output/audio_context.json"
 LAST_RUN_PROFILE_PATH = "profiles/last_run.yaml"
+PRODUCT_KNOWLEDGE_PATH = "data/product_knowledge.yaml"
 DEFAULT_CONFIG: Dict[str, Any] = {
     "sender_company": "",
     "sender_name": "",
@@ -109,6 +110,41 @@ def load_last_run_profile() -> Optional[Dict[str, Any]]:
         return data if isinstance(data, dict) else None
     except (OSError, yaml.YAMLError):
         return None
+
+
+def save_product_knowledge(products: dict) -> None:
+    """製品カード dict を data/product_knowledge.yaml に保存する。
+
+    複数行の str 値はリテラルブロック（|）スタイルで書き出すため人間が手編集できる。
+    """
+    path = Path(PRODUCT_KNOWLEDGE_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    class _LiteralDumper(yaml.Dumper):
+        pass
+
+    def _str_representer(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+        if "\n" in data:
+            return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+    _LiteralDumper.add_representer(str, _str_representer)
+
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(products, f, Dumper=_LiteralDumper, allow_unicode=True, default_flow_style=False)
+
+
+def load_product_knowledge() -> dict:
+    """data/product_knowledge.yaml を読み込む。存在しない・壊れている場合は {} を返す。"""
+    p = Path(PRODUCT_KNOWLEDGE_PATH)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, yaml.YAMLError):
+        return {}
 
 
 def load_cli_config() -> Dict[str, Any]:
@@ -497,6 +533,9 @@ def run_generate(
     # 音声コンテキストを読み込む（無ければ空 dict）
     audio_context_map = load_audio_context(audio_context_path)
 
+    # 製品ナレッジ（human-verified カード）を読み込む（無ければ空 dict）
+    product_knowledge = load_product_knowledge()
+
     exhibition_info = {
         "exhibition_name": exhibition_name or "",
         "exhibition_date": exhibition_date or "",
@@ -554,6 +593,7 @@ def run_generate(
                 schedule_policy=schedule_policy,
                 enable_llm_judge=_judge,
                 known_products=_known_products,
+                product_knowledge=product_knowledge,
             )
             results.append(result)
         except Exception as e:
@@ -845,6 +885,109 @@ def run_fetch_calendar_slots(
         return {"slots": [], "formatted": "", "error": str(e)}
     except Exception as e:
         return {"slots": [], "formatted": "", "error": str(e)}
+
+
+def run_kb_summary() -> Dict[str, Any]:
+    """
+    KB構築済みの全ソース本文を読み、LLMが製品カード下書きを返す。
+
+    Returns
+    -------
+    dict
+        ok (bool): 成功/失敗
+        products (dict[str, str]): {"製品名": "カード本文(自由文)", ...}
+        message (str): 状態メッセージ
+    """
+    import json as _json
+    import re as _re
+    from pathlib import Path as _Path
+    from src.config import Config
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import SystemMessage, HumanMessage
+
+    # --- KB状態確認 ---
+    kb = run_kb_status()
+    if kb["is_empty"] or not kb["documents"]:
+        return {"ok": False, "products": {}, "message": "KBが空です。先にナレッジベースを構築してください。"}
+
+    # --- 各ソースの本文を収集 ---
+    parent_store_path = _Path(Config.CHROMA_DB_DIR) / "parent_store.json"
+    parent_store: Dict[str, str] = {}
+    if parent_store_path.exists():
+        with open(parent_store_path, encoding="utf-8") as _f:
+            parent_store = _json.load(_f)
+
+    tech_docs_dir = _Path("data/tech_documents")
+    source_texts: list = []
+
+    for doc in kb["documents"]:
+        source = doc["source"]
+        source_type = doc["source_type"]
+        text = ""
+
+        if source_type == "markdown":
+            md_path = tech_docs_dir / source
+            if md_path.exists():
+                text = md_path.read_text(encoding="utf-8")
+        else:
+            # PDF 由来: parent_store.json から "{source}_parent_{idx}" キーを昇順に連結
+            prefix = f"{source}_parent_"
+            keyed: list = [
+                (k, v) for k, v in parent_store.items() if k.startswith(prefix)
+            ]
+            if keyed:
+                def _idx(k: str) -> int:
+                    tail = k[len(prefix):]
+                    return int(tail) if tail.isdigit() else 0
+                keyed.sort(key=lambda kv: _idx(kv[0]))
+                text = "\n".join(v for _, v in keyed)
+
+        if text.strip():
+            source_texts.append(f"=== ソース: {source} ===\n{text.strip()}")
+
+    if not source_texts:
+        return {"ok": False, "products": {}, "message": "ソースファイルの本文を取得できませんでした。"}
+
+    combined = "\n\n".join(source_texts)
+
+    # --- LLM 呼び出し ---
+    system_prompt = (
+        "あなたはプロダクトアナリストです。以下の製品技術資料を読み、"
+        "登場する製品を特定してください。1製品が複数文書にまたがる場合は1つに集約してください。\n"
+        "製品ごとに以下を自由文で記述してください: 概要／主な機能／価格体系／想定対象。"
+        "価格はプラン別があればすべて書いてください。\n\n"
+        "出力はJSON形式のみで返してください:\n"
+        '{"製品名": "カード本文(自由文)", ...}'
+    )
+    user_prompt = f"【製品技術資料】\n\n{combined}"
+
+    try:
+        llm = ChatOpenAI(
+            model=Config.LLM_MODEL,
+            temperature=0,
+            openai_api_key=Config.OPENAI_API_KEY,
+        )
+        response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        raw = response.content.strip()
+
+        # ```json ... ``` ブロックを除去（run_rank_mapping 踏襲）
+        raw = _re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = _re.sub(r"\s*```$", "", raw)
+
+        products: Dict[str, str] = _json.loads(raw)
+        if not isinstance(products, dict):
+            raise ValueError("LLM応答がdictではありません")
+
+        return {
+            "ok": True,
+            "products": products,
+            "message": f"{len(products)}製品のカード下書きを生成しました。",
+        }
+
+    except _json.JSONDecodeError as e:
+        return {"ok": False, "products": {}, "message": f"LLM応答のJSONパースに失敗しました: {e}"}
+    except Exception as e:
+        return {"ok": False, "products": {}, "message": f"LLM呼び出しに失敗しました: {e}"}
 
 
 def run_draft_to_gmail(

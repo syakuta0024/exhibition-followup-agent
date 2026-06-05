@@ -15,6 +15,7 @@
 | 「CRMと照合して」「名寄せしたい」 | `/match-records` |
 | 「KBの状態を確認して」「ナレッジベースに何が入ってる？」「チャンク数を見て」 | `/kb-status` |
 | 「ランク値を正規化して」「商談確度の値がバラバラ」「ランクのマッピングを確認して」 | `/rank-mapping` |
+| 「製品情報を確認して」「KBの理解を見せて」「カードを作って」 | `/kb-verify` |
 
 ### Skills 一覧（.claude/commands/）
 
@@ -27,6 +28,7 @@
 | `/match-records` | [.claude/commands/match-records.md](.claude/commands/match-records.md) | リード ↔ CRM の紐づけ確認 |
 | `/kb-status` | [.claude/commands/kb-status.md](.claude/commands/kb-status.md) | ナレッジベース状態確認（登録ドキュメント・チャンク数・最終更新） |
 | `/rank-mapping` | [.claude/commands/rank-mapping.md](.claude/commands/rank-mapping.md) | ランク値の正規化マッピング確認・保存（カラムの「値」の揺れに対応） |
+| `/kb-verify` | [.claude/commands/kb-verify.md](.claude/commands/kb-verify.md) | KBから製品カードを生成し1件ずつ確認・修正して data/product_knowledge.yaml に保存 |
 
 ### ビジネスロジックの呼び出し方（Skills 内での標準パターン）
 

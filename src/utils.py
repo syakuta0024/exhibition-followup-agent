@@ -430,6 +430,50 @@ def load_crm_csv(path: str) -> Optional[pd.DataFrame]:
     return apply_column_mapping(raw_df, mapping)
 
 
+def match_product_cards(
+    interested_products: str,
+    product_knowledge: Optional[dict],
+    threshold: int = 85,
+) -> dict:
+    """関心製品名を product_knowledge のキーとファジー照合して一致カードを返す。
+
+    Parameters
+    ----------
+    interested_products : str
+        カンマ区切りの製品名文字列（lead["interested_products"]）
+    product_knowledge : dict or None
+        {製品名: カード本文} の辞書
+    threshold : int
+        rapidfuzz.fuzz.partial_ratio の最低スコア（デフォルト 85）
+
+    Returns
+    -------
+    dict
+        {マッチしたキー: カード本文} の辞書。マッチなしは {}
+    """
+    if not interested_products or not product_knowledge:
+        return {}
+
+    try:
+        from rapidfuzz import fuzz
+    except ImportError:
+        return {}
+
+    names = [n.strip() for n in interested_products.split(",") if n.strip()]
+    result: dict = {}
+    for name in names:
+        best_key: Optional[str] = None
+        best_score = 0
+        for key in product_knowledge:
+            score = fuzz.partial_ratio(name, key)
+            if score >= threshold and score > best_score:
+                best_key = key
+                best_score = score
+        if best_key is not None:
+            result[best_key] = product_knowledge[best_key]
+    return result
+
+
 def save_results_to_csv(results: List[Dict], output_path: str) -> None:
     """
     メール生成結果をCSVファイルに保存する。

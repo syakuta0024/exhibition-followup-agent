@@ -72,6 +72,7 @@ class FollowUpAgent:
         schedule_policy: str = "ab_only",
         enable_llm_judge: bool = False,
         known_products: Optional[set] = None,
+        product_knowledge: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
         1件のリードを処理してフォローアップメールを生成する。
@@ -152,6 +153,14 @@ class FollowUpAgent:
             _step(2, "ベクトルDB検索", "warning", "インデックス未構築またはクエリなし")
 
         tech_context = "\n\n".join(r["text"][:500] for r in tech_results)
+
+        # ── Step 2.5: 製品カード照合（human-verified product knowledge） ──
+        from src.utils import match_product_cards
+        matched_cards = match_product_cards(
+            str(lead.get("interested_products", "")),
+            product_knowledge,
+        )
+        product_card_context = _build_product_card_context(matched_cards)
 
         # ── Step 3: CRM情報の取得（優先順位あり）────────────────────
         crm_context = ""
@@ -246,6 +255,7 @@ class FollowUpAgent:
             audio_context=audio_context,
             product_urls=product_urls,
             schedule_context=schedule_context,
+            product_card_context=product_card_context,
         )
         _step(6, "メール生成中", "done", f"件名: {email.get('subject', '')[:40]}")
 
@@ -497,6 +507,16 @@ class FollowUpAgent:
 
         logger.info(f"全リード処理完了: {len(results)}件")
         return results
+
+
+def _build_product_card_context(cards: dict) -> str:
+    """照合済み製品カードから注入用文字列を組み立てる。"""
+    if not cards:
+        return ""
+    parts = []
+    for card_text in cards.values():
+        parts.append(str(card_text).strip())
+    return "\n\n".join(parts)
 
 
 def _build_audio_context(transcript: str, needs: Optional[Dict[str, Any]]) -> str:
