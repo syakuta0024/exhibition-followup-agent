@@ -44,6 +44,7 @@ UIコードを一切書かずに対話型ワークフローを実現するのが
 | `match-records.md` | `/match-records` | リード ↔ CRMレコードの照合確認 |
 | `kb-status.md` | `/kb-status` | ナレッジベース状態確認（登録ドキュメント・チャンク数・最終更新日時） |
 | `rank-mapping.md` | `/rank-mapping` | ランク値の正規化マッピング確認・`cli_config.yaml` への保存（カラムの「値」の揺れに対応） |
+| `kb-verify.md` | `/kb-verify` | 製品カードの確認・修正 |
 
 ---
 
@@ -55,7 +56,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 
 | ファイル | 役割 |
 |---|---|
-| `cli_runner.py` | **Skillsと各モジュールをつなぐ唯一の橋渡し層**。`run_check()` / `run_build_kb()` / `run_generate()` / `run_draft_to_gmail()` / `run_kb_status()` / `run_rank_mapping()` / `run_fetch_calendar_slots()` / `run_setup_status()` / `save_last_run_profile()` / `load_last_run_profile()` 等を提供。すべての戻り値は `dict` に統一されている。`run_generate()` は `cli_config.yaml` の `crm_csv_path` から CRM DataFrame を、`output/audio_context.json` から音声コンテキストを自動読み込みし、`process_lead()` に渡す。リード識別キーは `build_lead_key(lead)` で算出する（lead_id 優先、無ければ `visitor_name_company_name` の複合キー）。エラー0件で完了した際は `save_last_run_profile()` でプロファイルを `profiles/last_run.yaml` に保存する |
+| `cli_runner.py` | **Skillsと各モジュールをつなぐ唯一の橋渡し層**。`run_check()` / `run_build_kb()` / `run_generate()` / `run_draft_to_gmail()` / `run_kb_status()` / `run_rank_mapping()` / `run_fetch_calendar_slots()` / `run_setup_status()` / `save_last_run_profile()` / `load_last_run_profile()` / `run_kb_summary()` / `save_product_knowledge()` / `load_product_knowledge()` 等を提供。すべての戻り値は `dict` に統一されている。`run_generate()` は `cli_config.yaml` の `crm_csv_path` から CRM DataFrame を、`output/audio_context.json` から音声コンテキストを自動読み込みし、`process_lead()` に渡す。リード識別キーは `build_lead_key(lead)` で算出する（lead_id 優先、無ければ `visitor_name_company_name` の複合キー）。エラー0件で完了した際は `save_last_run_profile()` でプロファイルを `profiles/last_run.yaml` に保存する |
 | `agent.py` | **オーケストレーター**（`FollowUpAgent`）。1リード分の処理フロー全体（ランク推定→RAG→CRM照合→Web検索→メール生成）を調整する。LangChainのAgentは使わず、シンプルな関数呼び出しで実装 |
 | `config.py` | **設定・定数の一元管理**。モデル名・料金・CSVカラム候補名（`REQUIRED_FIELDS` / `OPTIONAL_FIELDS`。後者には `rep_name`〈スキャン担当者：音声紐づけ用〉と `follow_person`〈フォロー担当：将来拡張用〉を分離して保持）・ランク定義等。コードに直書きせずここに集約することで変更を一箇所で済ませる |
 
@@ -96,7 +97,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 |---|---|
 | `gmail_drafter.py` | Gmail API（OAuth 2.0）で生成済みメールを下書き保存。初回のみブラウザ認証が必要。その後は `credentials/token.json` を自動利用 |
 | `calendar_client.py` | Google Calendar API で空き時間を取得する。`fetch_free_slots()` で平日・稼働時間内・予定重複なしの枠を返し、`format_slots_for_email()` でメール挿入用テキストに整形。Gmail と同じ `credentials/token.json` を使用 |
-| `utils.py` | CSV読み込み・カラムマッピング・ロガー・品質チェック等の汎用ヘルパー。各モジュールが共通で使う処理をここに集約。`load_crm_csv(path)` は CRM CSV を `CRM_REQUIRED_FIELDS / CRM_OPTIONAL_FIELDS` に従って標準形式の DataFrame に整形して返す（不在・空・破損時は None） |
+| `utils.py` | CSV読み込み・カラムマッピング・ロガー・品質チェック等の汎用ヘルパー。各モジュールが共通で使う処理をここに集約。`load_crm_csv(path)` は CRM CSV を `CRM_REQUIRED_FIELDS / CRM_OPTIONAL_FIELDS` に従って標準形式の DataFrame に整形して返す（不在・空・破損時は None）。`match_product_cards(interested_products, product_knowledge)` はリードの関心製品と製品カード辞書をファジー一致で照合し、一致カードを返す |
 | `pdf_processor.py` | **VLM PDF テキスト化**。`extract_text_from_pdf_vlm()` で PyMuPDF + gpt-5.4-nano vision により PDF をページ画像化→Markdown テキスト抽出。`is_pdf()` で拡張子判定。`build_index()` から呼ばれる |
 
 ### KB 状態確認
@@ -128,6 +129,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 | `test_output_management.py` | `cli_runner.py` | 出力ファイルのパス管理（タイムスタンプ付きファイル名生成等） |
 | `test_calendar_client.py` | `calendar_client.py` | Google Calendar API のモック化テスト（空き枠検索・土日除外・working_hours 境界・busy 重複・2営業日ルール・format_slots_for_email） |
 | `test_cli_runner_context.py` | `cli_runner.py` / `utils.py` | `load_crm_csv`・`build_lead_key`・`load_audio_context` の単体テストと、`run_generate()` が `crm_csv_path` から CRM DataFrame、`output/audio_context.json` から音声コンテキストを読み込んで `process_lead()` に渡すかの配線テスト（process_lead はモック化） |
+| `test_product_cards.py` | `utils.py` / `cli_runner.py` / `email_generator.py` / `agent.py` | 製品カード機能: 選択・保存・注入・配線 20件 |
 
 ---
 
@@ -144,6 +146,7 @@ Skillsから呼び出されるバックエンドロジック。Skills側はUIと
 | `data/test/*.csv` | 自動テスト専用のフィクスチャCSV（英語列・日本語列・欠損列・音声テスト用等） |
 | `data/test/audio/` | 音声テスト用ディレクトリ（**コミット対象外**）。`.gitkeep` のみ管理。音声ファイルは各自で配置する |
 | `test_m4a音声データ/` | 旧音声テスト用ディレクトリ（**コミット対象外**）。`.gitignore` で除外済み |
+| `data/product_knowledge.yaml` | 検証済み製品カード。.gitignore対象 |
 
 > **運用**: `data/tech_documents/` と `data/crm_records/` は「ユーザーが自社ファイルを置く場所」。  
 > デモ用ファイルと自社ファイルを混在させないこと。
