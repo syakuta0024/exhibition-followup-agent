@@ -75,8 +75,8 @@ def load_leads(csv_path: str) -> pd.DataFrame:
 
     df = pd.read_csv(csv_path, encoding="utf-8", dtype=str)
 
-    # 空白のトリミング
-    df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+    # 空白のトリミング（Python 3.13 + pandas では StringDtype になるため is_string_dtype で判定）
+    df = df.apply(lambda col: col.str.strip() if pd.api.types.is_string_dtype(col) else col)
 
     # NaN を空文字に統一
     df = df.fillna("")
@@ -192,8 +192,8 @@ def load_csv_with_encoding(file_obj: Any) -> pd.DataFrame:
     for enc in encodings:
         try:
             df = pd.read_csv(io.BytesIO(raw_bytes), encoding=enc, dtype=str)
-            # 空白のトリミング・NaN統一
-            df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+            # 空白のトリミング・NaN統一（Python 3.13 + pandas では StringDtype になるため is_string_dtype で判定）
+            df = df.apply(lambda col: col.str.strip() if pd.api.types.is_string_dtype(col) else col)
             df = df.fillna("")
             return df
         except (UnicodeDecodeError, Exception):
